@@ -5,32 +5,34 @@ import type { FinanceTransaction } from "./types";
 
 describe("finance rules", () => {
   it("splits cents evenly with deterministic remainder order", () => {
-    const splits = splitEvenly(1000, ["clara", "anna", "ben"], roommateIds);
+    const [first, second, third] = roommateIds;
+    const splits = splitEvenly(1000, [third, first, second], roommateIds);
 
     expect(splits).toEqual([
-      { roommateId: "anna", owedCents: 334 },
-      { roommateId: "ben", owedCents: 333 },
-      { roommateId: "clara", owedCents: 333 },
+      { roommateId: first, owedCents: 334 },
+      { roommateId: second, owedCents: 333 },
+      { roommateId: third, owedCents: 333 },
     ]);
     expect(sumSplitCents(splits)).toBe(1000);
   });
 
   it("calculates balances from expenses and settlements", () => {
+    const [first, second, third] = roommateIds;
     const transactions: FinanceTransaction[] = [
       {
         id: "expense-1",
         type: "expense",
         description: "Supermarkt",
         amountCents: 1200,
-        paidBy: "anna",
+        paidBy: first,
         paidAt: "2026-05-17",
-        createdBy: "anna",
+        createdBy: first,
         createdAt: "2026-05-17T10:00:00.000Z",
         updatedAt: "2026-05-17T10:00:00.000Z",
         splits: [
-          { roommateId: "anna", owedCents: 400 },
-          { roommateId: "ben", owedCents: 400 },
-          { roommateId: "clara", owedCents: 400 },
+          { roommateId: first, owedCents: 400 },
+          { roommateId: second, owedCents: 400 },
+          { roommateId: third, owedCents: 400 },
         ],
       },
       {
@@ -38,35 +40,37 @@ describe("finance rules", () => {
         type: "settlement",
         description: "Ausgleich",
         amountCents: 200,
-        fromRoommateId: "ben",
-        toRoommateId: "anna",
+        fromRoommateId: second,
+        toRoommateId: first,
         paidAt: "2026-05-18",
-        createdBy: "ben",
+        createdBy: second,
         createdAt: "2026-05-18T10:00:00.000Z",
         updatedAt: "2026-05-18T10:00:00.000Z",
         splits: [],
       },
     ];
 
-    expect(calculateBalances(transactions, roommateIds)).toEqual([
-      { roommateId: "anna", balanceCents: 600 },
-      { roommateId: "ben", balanceCents: -200 },
-      { roommateId: "clara", balanceCents: -400 },
-      { roommateId: "david", balanceCents: 0 },
-    ]);
+    expect(calculateBalances(transactions, roommateIds)).toEqual(
+      roommateIds.map((roommateId) => ({
+        roommateId,
+        balanceCents:
+          roommateId === first ? 600 : roommateId === second ? -200 : roommateId === third ? -400 : 0,
+      })),
+    );
   });
 
   it("suggests debtor to creditor settlements", () => {
+    const [first, second, third] = roommateIds;
     const settlements = suggestSettlements([
-      { roommateId: "anna", balanceCents: 600 },
-      { roommateId: "ben", balanceCents: -200 },
-      { roommateId: "clara", balanceCents: -400 },
-      { roommateId: "david", balanceCents: 0 },
+      { roommateId: first, balanceCents: 600 },
+      { roommateId: second, balanceCents: -200 },
+      { roommateId: third, balanceCents: -400 },
+      ...roommateIds.slice(3).map((roommateId) => ({ roommateId, balanceCents: 0 })),
     ]);
 
     expect(settlements).toEqual([
-      { fromRoommateId: "ben", toRoommateId: "anna", amountCents: 200 },
-      { fromRoommateId: "clara", toRoommateId: "anna", amountCents: 400 },
+      { fromRoommateId: second, toRoommateId: first, amountCents: 200 },
+      { fromRoommateId: third, toRoommateId: first, amountCents: 400 },
     ]);
   });
 });

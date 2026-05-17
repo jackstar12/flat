@@ -14,6 +14,17 @@ export const roommates: Roommate[] = [
 
 export const roommateIds = roommates.map((roommate) => roommate.id);
 
+export const receiptAssignmentPrompt = `Kran:
+
+Stadlmann:
+Viel Kase
+
+Mitter:
+
+Allgemein:
+Eier equal split
+Bier: 60% Mitter, 30% Stadlmann, 10% Kran`;
+
 export function findRoommate(roommateId: string): Roommate | undefined {
   return roommates.find((roommate) => roommate.id === roommateId);
 }

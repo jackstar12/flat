@@ -1,4 +1,4 @@
-import type { Chore, FrequencyUnit } from "./types";
+import type { Chore, FrequencyUnit, LaundryRotation } from "./types";
 
 export function currentAssigneeId(chore: Pick<Chore, "participantIds" | "rotationIndex">): string {
   if (chore.participantIds.length === 0) {
@@ -21,6 +21,20 @@ export function completeChore(
     ...chore,
     rotationIndex: normalizeRotationIndex(chore.rotationIndex + 1, participantCount),
     nextDueDate: addFrequency(completedDate, chore.frequencyUnit, chore.frequencyInterval),
+    lastCompletedAt: completedAtIso,
+    lastCompletedBy: completedBy,
+    updatedAt: completedAtIso,
+  };
+}
+
+export function completeLaundryRotation(
+  rotation: LaundryRotation,
+  completedBy: string,
+  completedAtIso: string,
+): LaundryRotation {
+  return {
+    ...rotation,
+    rotationIndex: normalizeRotationIndex(rotation.rotationIndex + 1, rotation.participantIds.length),
     lastCompletedAt: completedAtIso,
     lastCompletedBy: completedBy,
     updatedAt: completedAtIso,

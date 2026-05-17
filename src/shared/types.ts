@@ -46,6 +46,28 @@ export type SuggestedSettlement = {
   amountCents: number;
 };
 
+export type ReceiptSplit = {
+  roommateId: string;
+  amountCents: number;
+};
+
+export type ReceiptItem = {
+  name: string;
+  quantity: string | null;
+  amountCents: number;
+  assignmentReason: string;
+  splits: ReceiptSplit[];
+};
+
+export type ReceiptAnalysis = {
+  merchant: string | null;
+  receiptDate: string | null;
+  totalCents: number;
+  items: ReceiptItem[];
+  roommateTotals: ReceiptSplit[];
+  warnings: string[];
+};
+
 export type FrequencyUnit = "day" | "week" | "month";
 
 export type Chore = {
@@ -65,6 +87,14 @@ export type Chore = {
   updatedAt: string;
 };
 
+export type LaundryRotation = {
+  participantIds: string[];
+  rotationIndex: number;
+  lastCompletedAt: string | null;
+  lastCompletedBy: string | null;
+  updatedAt: string | null;
+};
+
 export type SessionPayload = {
   authenticated: boolean;
   roommate: Roommate | null;
@@ -80,4 +110,5 @@ export type FinancePayload = {
 
 export type TasksPayload = {
   chores: Chore[];
+  laundry: LaundryRotation;
 };

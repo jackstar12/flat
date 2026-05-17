@@ -9,13 +9,17 @@ import {
   Plus,
   Receipt,
   Repeat,
+  Sparkles,
   Trash2,
+  Upload,
   Users,
   WalletCards,
+  WashingMachine,
   X,
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { roommates, roommateIds, findRoommate, household } from "./shared/config";
+import { roommates, roommateIds, findRoommate, household, receiptAssignmentPrompt } from "./shared/config";
+import { aggregateReceiptSplits } from "./shared/receipt";
 import { currentAssigneeId, dateStatus } from "./shared/tasks";
 import type {
   Chore,
@@ -23,6 +27,8 @@ import type {
   FinanceSplit,
   FinanceTransaction,
   FrequencyUnit,
+  LaundryRotation,
+  ReceiptAnalysis,
   Roommate,
   SessionPayload,
   TasksPayload,
@@ -58,6 +64,14 @@ type ChoreForm = {
   isActive: boolean;
 };
 
+type ReceiptImportForm = {
+  description: string;
+  paidBy: string;
+  paidAt: string;
+  rulesPrompt: string;
+  receiptText: string;
+};
+
 const today = () => new Date().toISOString().slice(0, 10);
 
 const defaultExpenseForm = (): ExpenseForm => ({
@@ -85,6 +99,22 @@ const defaultChoreForm = (): ChoreForm => ({
   frequencyInterval: 1,
   nextDueDate: today(),
   isActive: true,
+});
+
+const defaultReceiptImportForm = (): ReceiptImportForm => ({
+  description: "Spar Rechnung",
+  paidBy: roommates[0].id,
+  paidAt: today(),
+  rulesPrompt: receiptAssignmentPrompt,
+  receiptText: "",
+});
+
+const defaultLaundryRotation = (): LaundryRotation => ({
+  participantIds: roommateIds,
+  rotationIndex: 0,
+  lastCompletedAt: null,
+  lastCompletedBy: null,
+  updatedAt: null,
 });
 
 export default function App() {
@@ -284,6 +314,7 @@ function FinanceView({
   const [editingExpense, setEditingExpense] = useState<FinanceTransaction | null>(null);
   const [settlementForm, setSettlementForm] = useState(defaultSettlementForm);
   const [settlementOpen, setSettlementOpen] = useState(false);
+  const [receiptOpen, setReceiptOpen] = useState(false);
   const sortedBalances = data?.balances ?? [];
   const transactions = data?.transactions ?? [];
 
@@ -304,10 +335,16 @@ function FinanceView({
             <h2 className="section-title">Finanzen</h2>
             <p className="section-subtitle">Ausgaben, Ausgleichszahlungen und aktuelle Salden.</p>
           </div>
-          <button className="primary-button" type="button" onClick={() => openExpense()}>
-            <Plus size={18} />
-            Ausgabe
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button className="secondary-button" type="button" onClick={() => setReceiptOpen(true)}>
+              <Sparkles size={18} />
+              Rechnung analysieren
+            </button>
+            <button className="primary-button" type="button" onClick={() => openExpense()}>
+              <Plus size={18} />
+              Ausgabe
+            </button>
+          </div>
         </div>
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -452,6 +489,230 @@ function FinanceView({
           onError={onError}
         />
       ) : null}
+
+      {receiptOpen ? (
+        <ReceiptImportPanel
+          onClose={() => setReceiptOpen(false)}
+          onSaved={() => {
+            setReceiptOpen(false);
+            onChanged();
+          }}
+          onError={onError}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ReceiptImportPanel({
+  onClose,
+  onSaved,
+  onError,
+}: {
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const [form, setForm] = useState<ReceiptImportForm>(() => defaultReceiptImportForm());
+  const [file, setFile] = useState<File | null>(null);
+  const [analysis, setAnalysis] = useState<ReceiptAnalysis | null>(null);
+  const [pending, setPending] = useState(false);
+
+  async function analyze(event: FormEvent) {
+    event.preventDefault();
+    setPending(true);
+    try {
+      const formData = new FormData();
+      formData.set("rulesPrompt", form.rulesPrompt);
+      formData.set("receiptText", form.receiptText);
+      if (file) {
+        formData.set("receipt", file);
+      }
+      const response = await apiForm<{ analysis: ReceiptAnalysis }>("/api/finance/receipt/analyze", formData);
+      setAnalysis(response.analysis);
+    } catch (unknownError) {
+      onError(readError(unknownError));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function saveExpense() {
+    if (!analysis) {
+      return;
+    }
+    if (!receiptAnalysisIsValid(analysis)) {
+      onError("Bitte die Aufteilung jeder Position passend zur Positionssumme korrigieren.");
+      return;
+    }
+    try {
+      await createExpenseFromReceipt(form, analysis);
+      onSaved();
+    } catch (unknownError) {
+      onError(readError(unknownError));
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-20 grid bg-ink/40 p-3 sm:place-items-center">
+      <section className="max-h-[calc(100vh-1.5rem)] w-full overflow-y-auto rounded-md border border-line bg-white p-4 shadow-soft sm:max-w-4xl sm:p-5">
+        <FormHeader title="Rechnung analysieren" onClose={onClose} />
+        <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
+          <form className="space-y-4" onSubmit={(event) => void analyze(event)}>
+            <label className="block">
+              <span className="label">Rechnungsbild</span>
+              <div className="rounded-md border border-dashed border-line bg-cloud p-4">
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-ink/75">
+                  <Upload size={17} />
+                  {file?.name ?? "Bild auswahlen"}
+                </div>
+                <input
+                  className="block w-full text-sm"
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                />
+              </div>
+            </label>
+            <label className="block">
+              <span className="label">Rechnungstext</span>
+              <textarea
+                className="input min-h-24"
+                value={form.receiptText}
+                onChange={(event) => setForm((current) => ({ ...current, receiptText: event.target.value }))}
+                placeholder="Optional: OCR-Text oder abgetippte Positionen"
+              />
+            </label>
+            <label className="block">
+              <span className="label">Essensregeln</span>
+              <textarea
+                className="input min-h-40"
+                value={form.rulesPrompt}
+                onChange={(event) => setForm((current) => ({ ...current, rulesPrompt: event.target.value }))}
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <RoommateSelect
+                label="Bezahlt von"
+                value={form.paidBy}
+                onChange={(value) => setForm((current) => ({ ...current, paidBy: value }))}
+              />
+              <DateInput
+                label="Datum"
+                value={form.paidAt}
+                onChange={(value) => setForm((current) => ({ ...current, paidAt: value }))}
+              />
+            </div>
+            <label className="block">
+              <span className="label">Beschreibung</span>
+              <input
+                className="input"
+                value={form.description}
+                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+              />
+            </label>
+            <button className="primary-button w-full" type="submit" disabled={pending}>
+              <Sparkles size={18} />
+              {pending ? "Analysiere..." : "Analysieren"}
+            </button>
+          </form>
+
+          <div className="rounded-md border border-line bg-cloud">
+            <div className="flex items-center justify-between border-b border-line bg-white px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Receipt size={18} className="text-moss" />
+                <h3 className="font-semibold">Vorschlag</h3>
+              </div>
+              {analysis ? <span className="text-sm font-semibold">{formatMoney(analysis.totalCents)}</span> : null}
+            </div>
+            {analysis ? (
+              <div className="space-y-4 p-4">
+                {analysis.warnings.length ? (
+                  <div className="rounded-md bg-lemon/30 px-3 py-2 text-sm text-ink">
+                    {analysis.warnings.join(" ")}
+                  </div>
+                ) : null}
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {analysis.roommateTotals.map((split) => (
+                    <div key={split.roommateId} className="rounded-md bg-white px-3 py-2">
+                      <p className="text-sm text-ink/65">{nameFor(split.roommateId)}</p>
+                      <p className="font-semibold">{formatMoney(split.amountCents)}</p>
+                    </div>
+                  ))}
+                </div>
+                {!receiptAnalysisIsValid(analysis) ? (
+                  <div className="rounded-md bg-coral/10 px-3 py-2 text-sm text-ink">
+                    Mindestens eine Position ist noch nicht exakt aufgeteilt.
+                  </div>
+                ) : null}
+                <div className="max-h-80 overflow-y-auto rounded-md border border-line bg-white">
+                  <div className="divide-y divide-line">
+                    {analysis.items.map((item, index) => (
+                      <article key={`${item.name}-${index}`} className="p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h4 className="font-semibold">{item.name}</h4>
+                            <p className="mt-1 text-xs text-ink/60">{item.assignmentReason}</p>
+                          </div>
+                          <span className="shrink-0 font-semibold">{formatMoney(item.amountCents)}</span>
+                        </div>
+                        <p className="mt-2 text-xs text-ink/65">
+                          {item.splits
+                            .map((split) => `${nameFor(split.roommateId)} ${formatMoney(split.amountCents)}`)
+                            .join(" · ")}
+                        </p>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                          {roommateIds.map((roommateId) => (
+                            <label key={roommateId} className="block">
+                              <span className="mb-1 block text-xs font-semibold text-ink/65">
+                                {nameFor(roommateId)}
+                              </span>
+                              <input
+                                className="input py-1 text-sm"
+                                min={0}
+                                step="0.01"
+                                type="number"
+                                value={euroInputFromCents(
+                                  item.splits.find((split) => split.roommateId === roommateId)?.amountCents ?? 0,
+                                )}
+                                onChange={(event) =>
+                                  setAnalysis((current) =>
+                                    current
+                                      ? updateReceiptItemSplit(
+                                          current,
+                                          index,
+                                          roommateId,
+                                          centsFromNumberInput(event.target.value),
+                                        )
+                                      : current,
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        <p className={`mt-2 text-xs ${receiptItemIsValid(item) ? "text-ink/55" : "text-coral"}`}>
+                          Aufgeteilt: {formatMoney(item.splits.reduce((sum, split) => sum + split.amountCents, 0))}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  className="primary-button w-full"
+                  type="button"
+                  disabled={!receiptAnalysisIsValid(analysis)}
+                  onClick={() => void saveExpense()}
+                >
+                  Als Ausgabe speichern
+                </button>
+              </div>
+            ) : (
+              <EmptyState label="Noch keine Analyse." />
+            )}
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -585,6 +846,7 @@ function TasksView({
   const [formOpen, setFormOpen] = useState(false);
   const [editingChore, setEditingChore] = useState<Chore | null>(null);
   const chores = data?.chores ?? [];
+  const laundry = data?.laundry ?? defaultLaundryRotation();
 
   function openChore(chore?: Chore) {
     setEditingChore(chore ?? null);
@@ -596,13 +858,25 @@ function TasksView({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="section-title">Aufgaben</h2>
-          <p className="section-subtitle">Wiederkehrende Aufgaben mit Rotation und Falligkeit.</p>
+          <p className="section-subtitle">Wiederkehrende Aufgaben und einfache Rotationen.</p>
         </div>
         <button className="primary-button" type="button" onClick={() => openChore()}>
           <Plus size={18} />
           Aufgabe
         </button>
       </div>
+
+      <LaundryCard
+        laundry={laundry}
+        onComplete={async () => {
+          try {
+            await api("/api/tasks/laundry/complete", { method: "POST" });
+            onChanged();
+          } catch (unknownError) {
+            onError(readError(unknownError));
+          }
+        }}
+      />
 
       <section className="grid gap-4 lg:grid-cols-3">
         {(["overdue", "today", "upcoming"] as const).map((status) => (
@@ -672,6 +946,57 @@ function TasksView({
         />
       ) : null}
     </div>
+  );
+}
+
+function LaundryCard({
+  laundry,
+  onComplete,
+}: {
+  laundry: LaundryRotation;
+  onComplete: () => Promise<void>;
+}) {
+  const assignee = findRoommate(currentAssigneeId(laundry));
+  const lastCompletedBy = laundry.lastCompletedBy ? findRoommate(laundry.lastCompletedBy) : null;
+
+  return (
+    <section className="rounded-md border border-line bg-white" data-testid="laundry-card">
+      <div className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-mint text-moss">
+            <WashingMachine size={22} />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold">Wäsche</h3>
+              <span className="rounded-full bg-cloud px-2 py-1 text-xs font-semibold text-ink/70">
+                Keine feste Fälligkeit
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-sm text-ink/75">
+              <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
+                <Users size={14} />
+                <span data-testid="laundry-current">{assignee?.name ?? "Unbekannt"}</span>
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
+                <Repeat size={14} />
+                {laundry.participantIds.map(nameFor).join(" -> ")}
+              </span>
+              {laundry.lastCompletedAt ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
+                  <CheckCircle2 size={14} />
+                  {formatDate(laundry.lastCompletedAt.slice(0, 10))} · {lastCompletedBy?.name ?? "Unbekannt"}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        <button className="primary-button md:self-center" type="button" onClick={() => void onComplete()}>
+          <CheckCircle2 size={17} />
+          Wäsche erledigt
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -1111,6 +1436,27 @@ async function api<T = unknown>(path: string, options: RequestInit = {}): Promis
   return (await response.json()) as T;
 }
 
+async function apiForm<T = unknown>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "include",
+    body,
+  });
+
+  if (!response.ok) {
+    let message = "Anfrage fehlgeschlagen.";
+    try {
+      const payload = (await response.json()) as { error?: string };
+      message = payload.error ?? message;
+    } catch {
+      message = response.statusText || message;
+    }
+    throw new Error(message);
+  }
+
+  return (await response.json()) as T;
+}
+
 async function submitExpense(form: ExpenseForm, id?: string): Promise<void> {
   const amountCents = centsFromEuroInput(form.amount);
   if (!Number.isInteger(amountCents) || amountCents <= 0) {
@@ -1139,6 +1485,77 @@ async function submitExpense(form: ExpenseForm, id?: string): Promise<void> {
       splits,
     }),
   });
+}
+
+async function createExpenseFromReceipt(form: ReceiptImportForm, analysis: ReceiptAnalysis): Promise<void> {
+  if (analysis.totalCents <= 0 || analysis.roommateTotals.length === 0) {
+    throw new Error("Die Analyse enthalt keine speicherbare Aufteilung.");
+  }
+  if (!receiptAnalysisIsValid(analysis)) {
+    throw new Error("Die Positionsaufteilungen passen nicht zur Rechnung.");
+  }
+
+  await api("/api/finance/expenses", {
+    method: "POST",
+    body: JSON.stringify({
+      description: form.description.trim() || analysis.merchant || "Rechnung",
+      amountCents: analysis.totalCents,
+      paidBy: form.paidBy,
+      paidAt: form.paidAt,
+      splitMode: "custom",
+      participantIds: [],
+      splits: analysis.roommateTotals.map((split) => ({
+        roommateId: split.roommateId,
+        owedCents: split.amountCents,
+      })),
+    }),
+  });
+}
+
+function updateReceiptItemSplit(
+  analysis: ReceiptAnalysis,
+  itemIndex: number,
+  roommateId: string,
+  amountCents: number,
+): ReceiptAnalysis {
+  const items = analysis.items.map((item, index) => {
+    if (index !== itemIndex) {
+      return item;
+    }
+
+    const splitByRoommate = new Map(item.splits.map((split) => [split.roommateId, split.amountCents]));
+    splitByRoommate.set(roommateId, amountCents);
+
+    return {
+      ...item,
+      splits: roommateIds
+        .map((id) => ({
+          roommateId: id,
+          amountCents: splitByRoommate.get(id) ?? 0,
+        }))
+        .filter((split) => split.amountCents > 0),
+    };
+  });
+
+  return {
+    ...analysis,
+    items,
+    totalCents: items.reduce((total, item) => total + item.amountCents, 0),
+    roommateTotals: aggregateReceiptSplits(items, roommateIds),
+  };
+}
+
+function receiptAnalysisIsValid(analysis: ReceiptAnalysis): boolean {
+  return analysis.items.length > 0 && analysis.items.every(receiptItemIsValid);
+}
+
+function receiptItemIsValid(item: ReceiptAnalysis["items"][number]): boolean {
+  return item.splits.reduce((sum, split) => sum + split.amountCents, 0) === item.amountCents;
+}
+
+function centsFromNumberInput(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100)) : 0;
 }
 
 async function submitSettlement(form: SettlementForm): Promise<void> {

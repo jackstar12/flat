@@ -9,16 +9,19 @@ import {
   suggestSettlements,
   sumSplitCents,
 } from "../src/shared/finance";
-import { completeChore } from "../src/shared/tasks";
+import { normalizeReceiptAnalysis } from "../src/shared/receipt";
+import { completeChore, completeLaundryRotation } from "../src/shared/tasks";
 import type {
   Chore,
   FinanceSplit,
   FinanceTransaction,
   FrequencyUnit,
+  LaundryRotation,
   Roommate,
 } from "../src/shared/types";
 
 type Env = {
+  AI: Ai;
   DB: D1Database;
   MAGIC_PASSWORD: string;
   SESSION_SECRET: string;
@@ -65,6 +68,13 @@ type ChoreRow = {
   is_active: number;
   created_by: string;
   created_at: string;
+  updated_at: string;
+};
+
+type LaundryRow = {
+  rotation_index: number;
+  last_completed_at: string | null;
+  last_completed_by: string | null;
   updated_at: string;
 };
 
@@ -135,6 +145,7 @@ const choreSchema = z.object({
 });
 
 const app = new Hono<AppBindings>();
+const receiptModel = "@cf/meta/llama-3.2-11b-vision-instruct";
 
 app.get("/api/session", async (c) => {
   const roommate = await readSession(c.req.raw, c.env.SESSION_SECRET);
@@ -315,8 +326,57 @@ app.post("/api/finance/settlements", zValidator("json", settlementSchema), async
   return c.json({ transaction: await getTransaction(c.env.DB, id) }, 201);
 });
 
+app.post("/api/finance/receipt/analyze", async (c) => {
+  if (!c.env.AI) {
+    return c.json({ error: "Workers AI ist fur diesen Worker nicht konfiguriert." }, 503);
+  }
+
+  const form = await c.req.raw.formData();
+  const rulesPrompt = stringFormValue(form.get("rulesPrompt")).trim();
+  const receiptText = stringFormValue(form.get("receiptText")).trim();
+  const receiptFile = form.get("receipt");
+  const file = receiptFile instanceof File && receiptFile.size > 0 ? receiptFile : null;
+
+  if (!receiptText && !file) {
+    return c.json({ error: "Bitte Rechnungsbild oder Rechnungstext angeben." }, 400);
+  }
+
+  if (file && !file.type.startsWith("image/")) {
+    return c.json({ error: "Bitte ein Bild der Rechnung hochladen." }, 400);
+  }
+
+  if (file && file.size > 4_000_000) {
+    return c.json({ error: "Das Rechnungsbild ist zu gross. Bitte unter 4 MB bleiben." }, 400);
+  }
+
+  const prompt = buildReceiptPrompt(rulesPrompt, receiptText);
+  const request: Record<string, unknown> = {
+    prompt,
+    max_tokens: 4096,
+    temperature: 0.1,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "receipt_analysis",
+        schema: receiptJsonSchema(),
+      },
+    },
+  };
+
+  if (file) {
+    request.image = Array.from(new Uint8Array(await file.arrayBuffer()));
+  }
+
+  const response = (await c.env.AI.run(receiptModel, request)) as { response?: unknown };
+  const parsed = parseAiJson(response.response);
+  return c.json({ analysis: normalizeReceiptAnalysis(parsed, roommateIds) });
+});
+
 app.get("/api/tasks", async (c) => {
-  return c.json({ chores: await listChores(c.env.DB) });
+  return c.json({
+    chores: await listChores(c.env.DB),
+    laundry: await getLaundryRotation(c.env.DB),
+  });
 });
 
 app.post("/api/tasks", zValidator("json", choreSchema), async (c) => {
@@ -392,6 +452,35 @@ app.delete("/api/tasks/:id", async (c) => {
   await requireChore(c.env.DB, id);
   await c.env.DB.prepare("DELETE FROM chores WHERE id = ? AND household_id = ?").bind(id, household.id).run();
   return c.json({ ok: true });
+});
+
+app.post("/api/tasks/laundry/complete", async (c) => {
+  const actor = c.get("roommate");
+  const current = await getLaundryRotation(c.env.DB);
+  const completedAt = new Date().toISOString();
+  const updated = completeLaundryRotation(current, actor.id, completedAt);
+
+  await c.env.DB
+    .prepare(
+      `INSERT INTO laundry_rotation (
+        household_id, rotation_index, last_completed_at, last_completed_by, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(household_id) DO UPDATE SET
+        rotation_index = excluded.rotation_index,
+        last_completed_at = excluded.last_completed_at,
+        last_completed_by = excluded.last_completed_by,
+        updated_at = excluded.updated_at`,
+    )
+    .bind(
+      household.id,
+      updated.rotationIndex,
+      updated.lastCompletedAt,
+      updated.lastCompletedBy,
+      updated.updatedAt,
+    )
+    .run();
+
+  return c.json({ laundry: await getLaundryRotation(c.env.DB) });
 });
 
 app.post("/api/tasks/:id/complete", async (c) => {
@@ -584,6 +673,35 @@ async function requireChore(db: D1Database, id: string): Promise<Chore> {
   return getChore(db, id);
 }
 
+async function getLaundryRotation(db: D1Database): Promise<LaundryRotation> {
+  const row = await db
+    .prepare(
+      `SELECT rotation_index, last_completed_at, last_completed_by, updated_at
+       FROM laundry_rotation
+       WHERE household_id = ?`,
+    )
+    .bind(household.id)
+    .first<LaundryRow>();
+
+  if (!row) {
+    return {
+      participantIds: roommateIds,
+      rotationIndex: 0,
+      lastCompletedAt: null,
+      lastCompletedBy: null,
+      updatedAt: null,
+    };
+  }
+
+  return {
+    participantIds: roommateIds,
+    rotationIndex: row.rotation_index,
+    lastCompletedAt: row.last_completed_at,
+    lastCompletedBy: row.last_completed_by,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapChore(row: ChoreRow): Chore {
   return {
     id: row.id,
@@ -606,6 +724,103 @@ function mapChore(row: ChoreRow): Chore {
 function stableParticipantIds(input: string[]): string[] {
   const selected = new Set(input);
   return roommateIds.filter((roommateId) => selected.has(roommateId));
+}
+
+function buildReceiptPrompt(rulesPrompt: string, receiptText: string): string {
+  const roommateList = roommates
+    .map((roommate) => `- ${roommate.name}: roommateId "${roommate.id}"`)
+    .join("\n");
+  const optionalReceiptText = receiptText
+    ? `\nOCR or pasted receipt text, if useful:\n${receiptText}\n`
+    : "";
+
+  return `You extract grocery receipt line items and assign each item to roommates.
+
+Return only valid JSON. Use integer cents, not floats. Use YYYY-MM-DD dates when visible.
+Use only these roommate IDs:
+${roommateList}
+
+Assignment rules supplied by the household:
+${rulesPrompt || "No special rules. Split unknown items equally."}
+
+Rules:
+- Extract detailed receipt items, not only the grand total.
+- If a household rule clearly matches an item, split that item according to the rule.
+- If no rule matches, split the item equally across all roommates.
+- Every item split must sum exactly to that item amount in cents.
+- Use the configured roommate IDs, never free-form names.
+- Add short assignmentReason values in German.
+${optionalReceiptText}`;
+}
+
+function receiptJsonSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["merchant", "receiptDate", "items", "warnings"],
+    properties: {
+      merchant: { type: ["string", "null"] },
+      receiptDate: { type: ["string", "null"] },
+      warnings: {
+        type: "array",
+        items: { type: "string" },
+      },
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "quantity", "amountCents", "assignmentReason", "splits"],
+          properties: {
+            name: { type: "string" },
+            quantity: { type: ["string", "null"] },
+            amountCents: { type: "integer", minimum: 1 },
+            assignmentReason: { type: "string" },
+            splits: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["roommateId", "amountCents"],
+                properties: {
+                  roommateId: { type: "string", enum: roommateIds },
+                  amountCents: { type: "integer", minimum: 1 },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function parseAiJson(value: unknown): unknown {
+  if (value && typeof value === "object") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    throw new HTTPError(400, "Workers AI hat keine lesbare JSON-Antwort geliefert.");
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    const match = /```(?:json)?\s*([\s\S]*?)```/.exec(value) ?? /(\{[\s\S]*\})/.exec(value);
+    if (!match) {
+      throw new HTTPError(400, "Workers AI hat keine JSON-Antwort geliefert.");
+    }
+    try {
+      return JSON.parse(match[1]);
+    } catch {
+      throw new HTTPError(400, "Workers AI hat keine gultige JSON-Antwort geliefert.");
+    }
+  }
+}
+
+function stringFormValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 async function readSession(request: Request, secret: string): Promise<Roommate | null> {
