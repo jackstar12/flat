@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { roommateIds } from "./config";
-import { addFrequency, completeChore, completeLaundryRotation, currentAssigneeId, dateStatus } from "./tasks";
-import type { Chore, LaundryRotation } from "./types";
+import {
+  addFrequency,
+  completeChore,
+  completeRotation,
+  currentAssigneeId,
+  dateStatus,
+  defaultChoreWeekday,
+  nextOccurrenceOnOrAfter,
+} from "./tasks";
+import { weekdays, type Chore, type Rotation } from "./types";
 
 const [first, second, third] = roommateIds;
 
@@ -13,7 +21,8 @@ const baseChore: Chore = {
   rotationIndex: 0,
   frequencyUnit: "week",
   frequencyInterval: 1,
-  nextDueDate: "2026-05-17",
+  scheduleWeekday: "wednesday",
+  nextDueDate: "2026-05-20",
   lastCompletedAt: null,
   lastCompletedBy: null,
   isActive: true,
@@ -22,12 +31,17 @@ const baseChore: Chore = {
   updatedAt: "2026-05-10T10:00:00.000Z",
 };
 
-const baseLaundry: LaundryRotation = {
+const baseLaundry: Rotation = {
+  id: "laundry",
+  title: "Wäsche",
+  description: "",
   participantIds: [first, second, third],
   rotationIndex: 0,
   lastCompletedAt: null,
   lastCompletedBy: null,
-  updatedAt: null,
+  createdBy: first,
+  createdAt: "2026-05-01T12:00:00.000Z",
+  updatedAt: "2026-05-01T12:00:00.000Z",
 };
 
 describe("task rules", () => {
@@ -36,17 +50,38 @@ describe("task rules", () => {
     expect(currentAssigneeId({ ...baseChore, rotationIndex: 4 })).toBe(second);
   });
 
-  it("completion advances assignee and due date", () => {
-    const completed = completeChore(baseChore, first, "2026-05-17T12:00:00.000Z");
+  it("defaults chores to Wednesday", () => {
+    expect(defaultChoreWeekday).toBe("wednesday");
+  });
+
+  it("computes the next occurrence for every weekday", () => {
+    expect(weekdays.map((weekday) => nextOccurrenceOnOrAfter("2026-05-18", weekday))).toEqual([
+      "2026-05-18",
+      "2026-05-19",
+      "2026-05-20",
+      "2026-05-21",
+      "2026-05-22",
+      "2026-05-23",
+      "2026-05-24",
+    ]);
+  });
+
+  it.each([
+    ["early", "2026-05-18T12:00:00.000Z", "2026-05-27"],
+    ["on time", "2026-05-20T12:00:00.000Z", "2026-05-27"],
+    ["late", "2026-05-22T12:00:00.000Z", "2026-05-27"],
+    ["more than a week late", "2026-05-28T12:00:00.000Z", "2026-06-03"],
+  ])("keeps the weekly schedule anchored when completed %s", (_label, completedAt, expectedDueDate) => {
+    const completed = completeChore(baseChore, first, completedAt);
 
     expect(completed.rotationIndex).toBe(1);
     expect(currentAssigneeId(completed)).toBe(second);
-    expect(completed.nextDueDate).toBe("2026-05-24");
+    expect(completed.nextDueDate).toBe(expectedDueDate);
     expect(completed.lastCompletedBy).toBe(first);
   });
 
-  it("laundry completion advances rotation without a due date", () => {
-    const completed = completeLaundryRotation(baseLaundry, first, "2026-05-17T12:00:00.000Z");
+  it("completion advances a rotation without a due date", () => {
+    const completed = completeRotation(baseLaundry, first, "2026-05-17T12:00:00.000Z");
 
     expect(completed.rotationIndex).toBe(1);
     expect(currentAssigneeId(completed)).toBe(second);

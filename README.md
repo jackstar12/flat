@@ -1,73 +1,80 @@
 # Flat Web
 
-Web-based shared-flat app focused on `Finanzen` and `Aufgaben`.
+Local web app for shared-flat finances and chores. It runs as one Bun service and is intended to be exposed only inside a Tailnet.
 
-## Development
+## Local architecture
+
+- React/Vite frontend, built into `dist/`
+- Hono API served by Bun
+- SQLite data in `data/flat.sqlite`
+- Receipt analysis through the authenticated local `codex` CLI
+- No Cloudflare, Wrangler, D1, or Workers AI dependency
+
+## Setup
+
+Requirements: Bun, Poppler (`pdftoppm`), and an authenticated Codex CLI on the service account.
 
 ```bash
 bun install
+cp .env.example .env
+```
+
+Set a private 64-hex `FLAT_PROXY_TOKEN`, matching only the authenticated ingress, and retain the long random `SESSION_SECRET` for roommate attribution sessions. Every request except GET/HEAD health requires server-to-server proof. The browser selects a roommate after Authentik authentication; there is no app password. Never expose the proof token in frontend code, Git or responses. Preserve exact `FLAT_TRUSTED_ORIGINS` for CSRF.
+
+Start the frontend and API in development mode:
+
+```bash
 bun run dev
 ```
 
-Local secrets live in `.dev.vars`. Roommates are configured in `src/shared/config.ts`.
+The frontend is then available at `http://127.0.0.1:5173`; Vite proxies API requests to the Bun server on port 8787.
 
-Example `.dev.vars` for local development:
-
-```bash
-MAGIC_PASSWORD="flatastic"
-SESSION_SECRET="dev-secret-change-before-deploy"
-```
-
-## D1
-
-Apply migrations locally:
+Build and run the single production-style service:
 
 ```bash
-bun run db:migrate:local
+bun run build
+bun run serve
 ```
 
-Create the production D1 database:
+It listens on `http://127.0.0.1:8787` by default. `GET /healthz` is the unauthenticated health check. Keep `HOST=127.0.0.1` when placing Tailscale Serve or a local reverse proxy in front of it.
+
+Install the included user service on this host:
 
 ```bash
-bunx wrangler d1 create flat-web
+systemctl --user link /home/jacksn/flat/deploy/flat-web.service
+systemctl --user enable --now flat-web.service
 ```
 
-Then replace the generated `database_id` in `wrangler.toml` and run:
+Inspect it with `systemctl --user status flat-web.service` and `journalctl --user -u flat-web.service`.
+
+## Data and migrations
+
+The server creates the SQLite database and applies unapplied files from `migrations/` at startup. Migrations can also be applied explicitly:
 
 ```bash
-bun run db:migrate:remote
-bunx wrangler secret put MAGIC_PASSWORD
-bunx wrangler secret put SESSION_SECRET
-bun run deploy
+bun run db:migrate
 ```
 
-If plaintext variables with the same names already exist in Cloudflare, remove them from `wrangler.toml`, deploy once, then create the secrets.
+Back up `data/flat.sqlite` (and its `-wal`/`-shm` companions while the service is running), or stop the service before copying the main file. Override the location with `FLAT_DATABASE_PATH`.
 
-## Workers AI
+## Receipt analysis
 
-Receipt analysis uses the Workers AI binding configured in `wrangler.toml`:
+Assignment rules are structured records in SQLite and can be added, edited, deleted, and saved directly in the receipt dialog. Item rules take precedence over category rules; unmatched items are split equally.
 
-```toml
-[ai]
-binding = "AI"
-```
+The API invokes `codex exec` with:
 
-The receipt parser currently uses `@cf/meta/llama-3.2-11b-vision-instruct`.
-Before first production use, accept Meta's model terms from the Cloudflare account that owns the Worker:
+- an ephemeral session;
+- a read-only sandbox in a temporary directory;
+- the receipt image or locally rendered PDF pages, when supplied;
+- a strict receipt JSON schema.
 
-```bash
-curl "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/ai/run/@cf/meta/llama-3.2-11b-vision-instruct" \
-  -X POST \
-  -H "Authorization: Bearer $CLOUDFLARE_AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data '{"prompt":"agree"}'
-```
+The temporary image, schema, and model response are removed after every request. The service account must already be logged into Codex (`codex login status`). A receipt request can take up to three minutes.
 
 ## Checks
 
 ```bash
 bun run typecheck
 bun run test
-bun run test:e2e
 bun run build
+bun run test:e2e
 ```

@@ -1,5 +1,6 @@
 import { splitEvenly } from "./finance";
-import type { ReceiptAnalysis, ReceiptItem, ReceiptSplit } from "./types";
+import { receiptTrackingCategories } from "./types";
+import type { ReceiptAnalysis, ReceiptItem, ReceiptSplit, ReceiptTrackingCategory } from "./types";
 
 export function normalizeReceiptAnalysis(
   raw: unknown,
@@ -46,7 +47,7 @@ export function aggregateReceiptSplits(
       roommateId,
       amountCents: totals.get(roommateId) ?? 0,
     }))
-    .filter((split) => split.amountCents > 0);
+    .filter((split) => split.amountCents !== 0);
 }
 
 function normalizeReceiptItem(
@@ -56,7 +57,7 @@ function normalizeReceiptItem(
   warnings: string[],
 ): ReceiptItem | null {
   const item = asRecord(rawItem);
-  const amountCents = normalizePositiveInteger(item.amountCents);
+  const amountCents = normalizeNonZeroInteger(item.amountCents);
   if (!amountCents) {
     warnings.push(`Position ${index + 1} ohne gultigen Betrag ignoriert.`);
     return null;
@@ -67,34 +68,48 @@ function normalizeReceiptItem(
         .map((split) => normalizeReceiptSplit(split, stableRoommateOrder))
         .filter((split): split is ReceiptSplit => Boolean(split))
     : [];
+  const assignmentReason = normalizeNullableString(item.assignmentReason) ?? "Equal split";
+  const itemName = normalizeName(item.name, index);
+  const requiresExactEqualSplit =
+    /gleichm(?:a|ä|ae)ß?ig/i.test(assignmentReason) ||
+    /app[- ]?(?:gutschein|joker)|coupon|pfand|leergut|oliven(?:ö|oe)l|darbo natur|lovely topa|m(?:ü|ue|u)llsack|waschmittel/i.test(
+      itemName,
+    );
 
   const splits =
-    proposedSplits.length > 0 && sumReceiptSplitCents(proposedSplits) === amountCents
+    requiresExactEqualSplit
+      ? splitSignedEvenly(amountCents, stableRoommateOrder)
+      : proposedSplits.length > 0 && sumReceiptSplitCents(proposedSplits) === amountCents
       ? orderSplits(proposedSplits, stableRoommateOrder)
-      : splitEvenly(amountCents, stableRoommateOrder, stableRoommateOrder).map((split) => ({
-          roommateId: split.roommateId,
-          amountCents: split.owedCents,
-        }));
+      : splitSignedEvenly(amountCents, stableRoommateOrder);
 
   if (proposedSplits.length > 0 && sumReceiptSplitCents(proposedSplits) !== amountCents) {
     warnings.push(`Position "${normalizeName(item.name, index)}" wurde wegen unpassender Anteile gleich geteilt.`);
   }
 
   return {
-    name: normalizeName(item.name, index),
+    name: itemName,
+    normalizedName: normalizeNullableString(item.normalizedName) ?? itemName,
+    category: normalizeTrackingCategory(item.category),
     quantity: normalizeNullableString(item.quantity),
     amountCents,
-    assignmentReason: normalizeNullableString(item.assignmentReason) ?? "Equal split",
+    assignmentReason,
     splits,
   };
+}
+
+function normalizeTrackingCategory(value: unknown): ReceiptTrackingCategory {
+  return typeof value === "string" && receiptTrackingCategories.includes(value as ReceiptTrackingCategory)
+    ? (value as ReceiptTrackingCategory)
+    : "Sonstiges";
 }
 
 function normalizeReceiptSplit(rawSplit: unknown, stableRoommateOrder: string[]): ReceiptSplit | null {
   const split = asRecord(rawSplit);
   const roommateId = typeof split.roommateId === "string" ? split.roommateId : "";
-  const amountCents = normalizePositiveInteger(split.amountCents);
+  const amountCents = normalizeInteger(split.amountCents);
 
-  if (!stableRoommateOrder.includes(roommateId) || !amountCents) {
+  if (!stableRoommateOrder.includes(roommateId) || amountCents === null) {
     return null;
   }
 
@@ -112,7 +127,7 @@ function orderSplits(splits: ReceiptSplit[], stableRoommateOrder: string[]): Rec
       roommateId,
       amountCents: byRoommate.get(roommateId) ?? 0,
     }))
-    .filter((split) => split.amountCents > 0);
+    .filter((split) => split.amountCents !== 0);
 }
 
 function sumReceiptSplitCents(splits: ReceiptSplit[]): number {
@@ -138,8 +153,20 @@ function normalizeDate(value: unknown): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 }
 
-function normalizePositiveInteger(value: unknown): number | null {
-  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : null;
+function normalizeNonZeroInteger(value: unknown): number | null {
+  return Number.isInteger(value) && Number(value) !== 0 ? Number(value) : null;
+}
+
+function normalizeInteger(value: unknown): number | null {
+  return Number.isInteger(value) ? Number(value) : null;
+}
+
+function splitSignedEvenly(amountCents: number, stableRoommateOrder: string[]): ReceiptSplit[] {
+  const sign = Math.sign(amountCents);
+  return splitEvenly(Math.abs(amountCents), stableRoommateOrder, stableRoommateOrder).map((split) => ({
+    roommateId: split.roommateId,
+    amountCents: split.owedCents * sign,
+  }));
 }
 
 function normalizeWarnings(value: unknown): string[] {

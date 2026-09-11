@@ -5,15 +5,17 @@
   "type": "module",
   "packageManager": "bun@1.3.12",
   "scripts": {
-    "dev": "vite dev --host 0.0.0.0",
+    "dev": "bun run --parallel dev:server dev:client",
+    "dev:server": "bun --watch server/index.ts --api-only",
+    "dev:client": "vite dev --host 0.0.0.0",
     "build": "tsc -b && vite build",
-    "preview": "bun run build && vite preview --host 0.0.0.0",
-    "deploy": "bun run build && wrangler deploy",
+    "start": "bun run build && bun server/index.ts",
+    "serve": "bun server/index.ts",
     "typecheck": "tsc -b",
-    "test": "vitest run --config vitest.config.ts",
+    "test": "vitest run --config vitest.config.ts && bun test server/db.bun.test.ts server/app.bun.test.ts server/codex.bun.test.ts",
     "test:e2e": "playwright test",
-    "db:migrate:local": "wrangler d1 migrations apply flat-web --local",
-    "db:migrate:remote": "wrangler d1 migrations apply flat-web --remote"
+    "db:migrate": "bun server/migrate.ts",
+    "import:receipts": "bun scripts/import-receipts.ts"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.7.5",
@@ -24,20 +26,18 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.37.1",
-    "@cloudflare/workers-types": "^4.20260517.0",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/forms": "^0.5.10",
+    "@types/bun": "^1.4.0",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.6",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.0",
-    "@playwright/test": "^1.60.0",
     "autoprefixer": "^10.4.22",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.18",
     "typescript": "^5.9.3",
     "vite": "^7.2.2",
-    "vitest": "^4.0.9",
-    "wrangler": "^4.92.0"
+    "vitest": "^4.0.9"
   }
 }

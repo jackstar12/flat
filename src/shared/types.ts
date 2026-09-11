@@ -33,6 +33,16 @@ export type FinanceTransaction = {
   fromRoommateId?: string;
   toRoommateId?: string;
   splits: FinanceSplit[];
+  receiptItems?: ReceiptItem[];
+  receiptSourceRef?: string;
+  receiptUpload?: ReceiptUpload;
+};
+
+export type ReceiptUpload = {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  url: string;
 };
 
 export type Balance = {
@@ -53,11 +63,34 @@ export type ReceiptSplit = {
 
 export type ReceiptItem = {
   name: string;
+  normalizedName: string;
+  category: ReceiptTrackingCategory;
   quantity: string | null;
   amountCents: number;
   assignmentReason: string;
   splits: ReceiptSplit[];
 };
+
+export const receiptTrackingCategories = [
+  "Eier",
+  "Obst",
+  "Beeren",
+  "Gemüse",
+  "Milchprodukte",
+  "Fleisch & Wurst",
+  "Fisch",
+  "Brot & Gebäck",
+  "Getreide & Frühstück",
+  "Nüsse & Snacks",
+  "Aufstriche & Honig",
+  "Öle & Gewürze",
+  "Getränke",
+  "Haushalt",
+  "Pfand & Rabatte",
+  "Sonstiges",
+] as const;
+
+export type ReceiptTrackingCategory = (typeof receiptTrackingCategories)[number];
 
 export type ReceiptAnalysis = {
   merchant: string | null;
@@ -68,7 +101,29 @@ export type ReceiptAnalysis = {
   warnings: string[];
 };
 
+export type ReceiptAssignmentRuleTarget = "category" | "item";
+
+export type ReceiptAssignmentRule = {
+  id: string;
+  target: ReceiptAssignmentRuleTarget;
+  match: string;
+  shares: Record<string, number>;
+  extraDescription: string | null;
+};
+
 export type FrequencyUnit = "day" | "week" | "month";
+
+export const weekdays = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+] as const;
+
+export type Weekday = (typeof weekdays)[number];
 
 export type Chore = {
   id: string;
@@ -78,6 +133,7 @@ export type Chore = {
   rotationIndex: number;
   frequencyUnit: FrequencyUnit;
   frequencyInterval: number;
+  scheduleWeekday: Weekday | null;
   nextDueDate: string;
   lastCompletedAt: string | null;
   lastCompletedBy: string | null;
@@ -87,12 +143,17 @@ export type Chore = {
   updatedAt: string;
 };
 
-export type LaundryRotation = {
+export type Rotation = {
+  id: string;
+  title: string;
+  description: string;
   participantIds: string[];
   rotationIndex: number;
   lastCompletedAt: string | null;
   lastCompletedBy: string | null;
-  updatedAt: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type SessionPayload = {
@@ -110,5 +171,5 @@ export type FinancePayload = {
 
 export type TasksPayload = {
   chores: Chore[];
-  laundry: LaundryRotation;
+  rotations: Rotation[];
 };

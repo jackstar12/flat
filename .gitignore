@@ -7,3 +7,9 @@ dist
 coverage
 test-results
 playwright-report
+data
+.env
+.firecrawl
+
+# Editor recovery files remain local.
+*.swp

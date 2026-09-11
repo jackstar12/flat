@@ -1,4 +1,6 @@
-import type { Chore, FrequencyUnit, LaundryRotation } from "./types";
+import { weekdays, type Chore, type FrequencyUnit, type Rotation, type Weekday } from "./types";
+
+export const defaultChoreWeekday: Weekday = "wednesday";
 
 export function currentAssigneeId(chore: Pick<Chore, "participantIds" | "rotationIndex">): string {
   if (chore.participantIds.length === 0) {
@@ -16,22 +18,62 @@ export function completeChore(
 ): Chore {
   const completedDate = completedAtIso.slice(0, 10);
   const participantCount = chore.participantIds.length;
+  const nextDueDate =
+    chore.frequencyUnit === "week"
+      ? nextWeeklyDueDate(
+          chore.nextDueDate,
+          completedDate,
+          chore.scheduleWeekday ?? weekdayOfDate(chore.nextDueDate),
+          chore.frequencyInterval,
+        )
+      : addFrequency(completedDate, chore.frequencyUnit, chore.frequencyInterval);
 
   return {
     ...chore,
     rotationIndex: normalizeRotationIndex(chore.rotationIndex + 1, participantCount),
-    nextDueDate: addFrequency(completedDate, chore.frequencyUnit, chore.frequencyInterval),
+    nextDueDate,
     lastCompletedAt: completedAtIso,
     lastCompletedBy: completedBy,
     updatedAt: completedAtIso,
   };
 }
 
-export function completeLaundryRotation(
-  rotation: LaundryRotation,
+export function nextOccurrenceOnOrAfter(dateString: string, weekday: Weekday): string {
+  const date = parseDateOnly(dateString);
+  const target = weekdayIndex(weekday);
+  const daysUntilTarget = (target - date.getUTCDay() + 7) % 7;
+  date.setUTCDate(date.getUTCDate() + daysUntilTarget);
+  return formatDateOnly(date);
+}
+
+export function nextWeeklyDueDate(
+  dueDateString: string,
+  completedDateString: string,
+  weekday: Weekday,
+  interval: number,
+): string {
+  if (!Number.isInteger(interval) || interval <= 0) {
+    throw new Error("Frequency interval must be a positive integer.");
+  }
+
+  const completedDate = parseDateOnly(completedDateString);
+  const dueDate = parseDateOnly(nextOccurrenceOnOrAfter(dueDateString, weekday));
+  do {
+    dueDate.setUTCDate(dueDate.getUTCDate() + interval * 7);
+  } while (dueDate <= completedDate);
+  return formatDateOnly(dueDate);
+}
+
+export function weekdayOfDate(dateString: string): Weekday {
+  const day = parseDateOnly(dateString).getUTCDay();
+  return weekdays[(day + 6) % 7];
+}
+
+export function completeRotation(
+  rotation: Rotation,
   completedBy: string,
   completedAtIso: string,
-): LaundryRotation {
+): Rotation {
   return {
     ...rotation,
     rotationIndex: normalizeRotationIndex(rotation.rotationIndex + 1, rotation.participantIds.length),
@@ -86,6 +128,10 @@ function normalizeRotationIndex(index: number, participantCount: number): number
     throw new Error("Participant count must be positive.");
   }
   return ((index % participantCount) + participantCount) % participantCount;
+}
+
+function weekdayIndex(weekday: Weekday): number {
+  return (weekdays.indexOf(weekday) + 1) % 7;
 }
 
 function parseDateOnly(dateString: string): Date {

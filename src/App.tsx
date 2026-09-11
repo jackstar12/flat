@@ -2,36 +2,41 @@ import {
   Banknote,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   Coins,
+  ExternalLink,
+  FileText,
   LogOut,
   Pencil,
   Plus,
   Receipt,
   Repeat,
   Sparkles,
+  Tags,
   Trash2,
   Upload,
   Users,
   WalletCards,
-  WashingMachine,
   X,
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { roommates, roommateIds, findRoommate, household, receiptAssignmentPrompt } from "./shared/config";
+import { roommates, roommateIds, findRoommate, household } from "./shared/config";
 import { aggregateReceiptSplits } from "./shared/receipt";
-import { currentAssigneeId, dateStatus } from "./shared/tasks";
+import { currentAssigneeId, dateStatus, defaultChoreWeekday } from "./shared/tasks";
 import type {
   Chore,
   FinancePayload,
   FinanceSplit,
   FinanceTransaction,
   FrequencyUnit,
-  LaundryRotation,
+  Rotation,
   ReceiptAnalysis,
+  ReceiptAssignmentRule,
   Roommate,
   SessionPayload,
   TasksPayload,
+  Weekday,
 } from "./shared/types";
 import { centsFromEuroInput, euroInputFromCents, formatDate, formatMoney } from "./shared/format";
 
@@ -58,17 +63,21 @@ type ChoreForm = {
   title: string;
   description: string;
   participantIds: string[];
-  frequencyUnit: FrequencyUnit;
   frequencyInterval: number;
-  nextDueDate: string;
+  scheduleWeekday: Weekday | null;
   isActive: boolean;
+};
+
+type RotationForm = {
+  title: string;
+  description: string;
+  participantIds: string[];
 };
 
 type ReceiptImportForm = {
   description: string;
   paidBy: string;
   paidAt: string;
-  rulesPrompt: string;
   receiptText: string;
 };
 
@@ -95,9 +104,8 @@ const defaultChoreForm = (): ChoreForm => ({
   title: "",
   description: "",
   participantIds: roommateIds,
-  frequencyUnit: "week",
   frequencyInterval: 1,
-  nextDueDate: today(),
+  scheduleWeekday: defaultChoreWeekday,
   isActive: true,
 });
 
@@ -105,16 +113,13 @@ const defaultReceiptImportForm = (): ReceiptImportForm => ({
   description: "Spar Rechnung",
   paidBy: roommates[0].id,
   paidAt: today(),
-  rulesPrompt: receiptAssignmentPrompt,
   receiptText: "",
 });
 
-const defaultLaundryRotation = (): LaundryRotation => ({
+const defaultRotationForm = (): RotationForm => ({
+  title: "",
+  description: "",
   participantIds: roommateIds,
-  rotationIndex: 0,
-  lastCompletedAt: null,
-  lastCompletedBy: null,
-  updatedAt: null,
 });
 
 export default function App() {
@@ -242,7 +247,6 @@ export default function App() {
 
 function LoginScreen({ onLogin }: { onLogin: (session: SessionPayload) => Promise<void> }) {
   const [roommateId, setRoommateId] = useState(roommates[0].id);
-  const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -253,7 +257,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: SessionPayload) => Promis
     try {
       const nextSession = await api<SessionPayload>("/api/login", {
         method: "POST",
-        body: JSON.stringify({ roommateId, password }),
+        body: JSON.stringify({ roommateId }),
       });
       await onLogin(nextSession);
     } catch (unknownError) {
@@ -268,7 +272,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: SessionPayload) => Promis
       <section className="w-full max-w-md rounded-md border border-line bg-white p-6 shadow-soft">
         <div className="mb-6">
           <p className="text-sm font-medium text-moss">{household.name}</p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-normal">Einloggen</h1>
+          <h1 className="mt-1 text-3xl font-semibold tracking-normal">Person wählen</h1>
         </div>
         <form className="space-y-4" onSubmit={(event) => void submit(event)}>
           <label className="block">
@@ -281,19 +285,9 @@ function LoginScreen({ onLogin }: { onLogin: (session: SessionPayload) => Promis
               ))}
             </select>
           </label>
-          <label className="block">
-            <span className="label">WG-Passwort</span>
-            <input
-              className="input"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-            />
-          </label>
           {error ? <p className="rounded-md bg-coral/10 px-3 py-2 text-sm text-ink">{error}</p> : null}
           <button className="primary-button w-full" type="submit" disabled={pending}>
-            {pending ? "Anmelden..." : "Anmelden"}
+            {pending ? "Weiter..." : "Weiter"}
           </button>
         </form>
       </section>
@@ -317,6 +311,10 @@ function FinanceView({
   const [receiptOpen, setReceiptOpen] = useState(false);
   const sortedBalances = data?.balances ?? [];
   const transactions = data?.transactions ?? [];
+  const totalSpentCents = transactions.reduce(
+    (total, transaction) => total + (transaction.type === "expense" ? transaction.amountCents : 0),
+    0,
+  );
 
   function openExpense(transaction?: FinanceTransaction) {
     if (transaction) {
@@ -347,17 +345,25 @@ function FinanceView({
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-3">
           {sortedBalances.map((balance) => (
             <BalanceCard key={balance.roommateId} roommateId={balance.roommateId} cents={balance.balanceCents} />
           ))}
         </div>
 
         <div className="rounded-md border border-line bg-white">
-          <div className="flex items-center justify-between border-b border-line px-4 py-3">
+          <div className="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
             <div className="flex items-center gap-2">
               <Receipt size={18} className="text-moss" />
               <h3 className="font-semibold">Ledger</h3>
+            </div>
+            <div className="min-w-0 text-right" data-testid="total-spent">
+              <span className="block text-[10px] font-medium uppercase tracking-[0.08em] text-ink/45">
+                Gesamtausgaben
+              </span>
+              <strong className="block truncate text-sm font-semibold tabular-nums sm:text-base">
+                {formatMoney(totalSpentCents)}
+              </strong>
             </div>
           </div>
           <div className="divide-y divide-line">
@@ -385,6 +391,8 @@ function FinanceView({
       </section>
 
       <aside className="space-y-5">
+        <ProductTrackingCard transactions={transactions} />
+
         <div className="rounded-md border border-line bg-white p-4">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -517,13 +525,40 @@ function ReceiptImportPanel({
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<ReceiptAnalysis | null>(null);
   const [pending, setPending] = useState(false);
+  const [rules, setRules] = useState<ReceiptAssignmentRule[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(true);
+  const [rulesSaving, setRulesSaving] = useState(false);
+  const [rulesDirty, setRulesDirty] = useState(false);
+
+  useEffect(() => {
+    void api<{ rules: ReceiptAssignmentRule[] }>("/api/receipt-rules")
+      .then((payload) => setRules(payload.rules))
+      .catch((unknownError) => onError(readError(unknownError)))
+      .finally(() => setRulesLoading(false));
+  }, [onError]);
+
+  async function saveRules(): Promise<void> {
+    setRulesSaving(true);
+    try {
+      const payload = await api<{ rules: ReceiptAssignmentRule[] }>("/api/receipt-rules", {
+        method: "PUT",
+        body: JSON.stringify({ rules }),
+      });
+      setRules(payload.rules);
+      setRulesDirty(false);
+    } finally {
+      setRulesSaving(false);
+    }
+  }
 
   async function analyze(event: FormEvent) {
     event.preventDefault();
     setPending(true);
     try {
+      if (rulesDirty) {
+        await saveRules();
+      }
       const formData = new FormData();
-      formData.set("rulesPrompt", form.rulesPrompt);
       formData.set("receiptText", form.receiptText);
       if (file) {
         formData.set("receipt", file);
@@ -546,7 +581,7 @@ function ReceiptImportPanel({
       return;
     }
     try {
-      await createExpenseFromReceipt(form, analysis);
+      await createExpenseFromReceipt(form, analysis, file);
       onSaved();
     } catch (unknownError) {
       onError(readError(unknownError));
@@ -560,16 +595,16 @@ function ReceiptImportPanel({
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
           <form className="space-y-4" onSubmit={(event) => void analyze(event)}>
             <label className="block">
-              <span className="label">Rechnungsbild</span>
+              <span className="label">Rechnung (Bild oder PDF)</span>
               <div className="rounded-md border border-dashed border-line bg-cloud p-4">
                 <div className="mb-3 flex items-center gap-2 text-sm font-medium text-ink/75">
                   <Upload size={17} />
-                  {file?.name ?? "Bild auswahlen"}
+                  {file?.name ?? "Bild oder PDF auswahlen"}
                 </div>
                 <input
                   className="block w-full text-sm"
                   type="file"
-                  accept="image/*"
+                  accept="image/*,application/pdf,.pdf"
                   onChange={(event) => setFile(event.target.files?.[0] ?? null)}
                 />
               </div>
@@ -583,14 +618,18 @@ function ReceiptImportPanel({
                 placeholder="Optional: OCR-Text oder abgetippte Positionen"
               />
             </label>
-            <label className="block">
-              <span className="label">Essensregeln</span>
-              <textarea
-                className="input min-h-40"
-                value={form.rulesPrompt}
-                onChange={(event) => setForm((current) => ({ ...current, rulesPrompt: event.target.value }))}
-              />
-            </label>
+            <ReceiptRulesEditor
+              rules={rules}
+              loading={rulesLoading}
+              saving={rulesSaving}
+              dirty={rulesDirty}
+              onChange={(nextRules) => {
+                setRules(nextRules);
+                setRulesDirty(true);
+              }}
+              onSave={() => void saveRules().catch((unknownError) => onError(readError(unknownError)))}
+              onError={onError}
+            />
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
               <RoommateSelect
                 label="Bezahlt von"
@@ -669,7 +708,6 @@ function ReceiptImportPanel({
                               </span>
                               <input
                                 className="input py-1 text-sm"
-                                min={0}
                                 step="0.01"
                                 type="number"
                                 value={euroInputFromCents(
@@ -715,6 +753,198 @@ function ReceiptImportPanel({
       </section>
     </div>
   );
+}
+
+function ReceiptRulesEditor({
+  rules,
+  loading,
+  saving,
+  dirty,
+  onChange,
+  onSave,
+  onError,
+}: {
+  rules: ReceiptAssignmentRule[];
+  loading: boolean;
+  saving: boolean;
+  dirty: boolean;
+  onChange: (rules: ReceiptAssignmentRule[]) => void;
+  onSave: () => void;
+  onError: (message: string) => void;
+}) {
+  const [draft, setDraft] = useState<ReceiptAssignmentRule | null>(null);
+
+  function applyDraft() {
+    if (!draft) return;
+    if (!draft.match.trim()) {
+      onError("Bitte einen Begriff fur die Regel angeben.");
+      return;
+    }
+    const total = Object.values(draft.shares).reduce((sum, percentage) => sum + percentage, 0);
+    if (total !== 100) {
+      onError(`Die Regel muss 100% ergeben (aktuell ${total}%).`);
+      return;
+    }
+    const duplicate = rules.some(
+      (rule) =>
+        rule.id !== draft.id &&
+        rule.target === draft.target &&
+        rule.match.trim().toLocaleLowerCase("de") === draft.match.trim().toLocaleLowerCase("de"),
+    );
+    if (duplicate) {
+      onError("Diese Regel existiert bereits.");
+      return;
+    }
+
+    const next = { ...draft, match: draft.match.trim(), extraDescription: draft.extraDescription?.trim() || null };
+    onChange(rules.some((rule) => rule.id === draft.id) ? rules.map((rule) => (rule.id === draft.id ? next : rule)) : [...rules, next]);
+    setDraft(null);
+  }
+
+  return (
+    <section aria-labelledby="receipt-rules-title" className="rounded-md border border-line bg-white">
+      <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2.5">
+        <h3 id="receipt-rules-title" className="font-semibold">Regeln</h3>
+        <div className="flex gap-2">
+          <button
+            className="secondary-button min-h-9 px-3 py-1.5 text-sm"
+            type="button"
+            onClick={() => setDraft(newReceiptAssignmentRule())}
+          >
+            <Plus size={16} />
+            Regel
+          </button>
+          <button
+            className="secondary-button min-h-9 px-3 py-1.5 text-sm"
+            type="button"
+            disabled={loading || saving || !dirty}
+            onClick={onSave}
+          >
+            {saving ? "Speichert..." : "Speichern"}
+          </button>
+        </div>
+      </div>
+
+      {draft ? (
+        <div className="space-y-3 border-b border-line bg-cloud/70 p-3">
+          <div className="grid grid-cols-[110px_1fr] gap-2">
+            <label>
+              <span className="mb-1 block text-xs font-semibold text-ink/65">Ziel</span>
+              <select
+                aria-label="Regelziel"
+                className="input py-2 text-sm"
+                value={draft.target}
+                onChange={(event) => setDraft({ ...draft, target: event.target.value as "category" | "item" })}
+              >
+                <option value="category">Kategorie</option>
+                <option value="item">Artikel</option>
+              </select>
+            </label>
+            <label>
+              <span className="mb-1 block text-xs font-semibold text-ink/65">Treffer</span>
+              <input
+                aria-label="Regelbegriff"
+                className="input py-2 text-sm"
+                value={draft.match}
+                onChange={(event) => setDraft({ ...draft, match: event.target.value })}
+              />
+            </label>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {roommates.map((roommate) => (
+              <label key={roommate.id}>
+                <span className="mb-1 block truncate text-xs font-semibold text-ink/65">{roommate.name} %</span>
+                <input
+                  aria-label={`${roommate.name} Prozent`}
+                  className="input py-2 text-sm"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={draft.shares[roommate.id] ?? 0}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      shares: { ...draft.shares, [roommate.id]: Number(event.target.value) },
+                    })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold text-ink/65">Zusatzbeschreibung</span>
+            <input
+              aria-label="Zusatzbeschreibung"
+              className="input py-2 text-sm"
+              value={draft.extraDescription ?? ""}
+              onChange={(event) => setDraft({ ...draft, extraDescription: event.target.value })}
+              placeholder="Optional"
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button className="secondary-button min-h-9 px-3 py-1.5 text-sm" type="button" onClick={() => setDraft(null)}>
+              Abbrechen
+            </button>
+            <button className="primary-button min-h-9 px-3 py-1.5 text-sm" type="button" onClick={applyDraft}>
+              Ubernehmen
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="max-h-72 divide-y divide-line overflow-y-auto">
+        {loading ? <EmptyState label="Regeln werden geladen..." compact /> : null}
+        {!loading && rules.length === 0 ? <EmptyState label="Noch keine Regeln." compact /> : null}
+        {!loading
+          ? rules.map((rule) => (
+              <article key={rule.id} className="flex items-center gap-3 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-cloud px-2 py-0.5 text-xs font-semibold text-ink/60">
+                      {rule.target === "category" ? "Kategorie" : "Artikel"}
+                    </span>
+                    <strong className="truncate">{rule.match}</strong>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-ink/60">
+                    {roommates
+                      .filter((roommate) => (rule.shares[roommate.id] ?? 0) > 0)
+                      .map((roommate) => `${roommate.name} ${rule.shares[roommate.id]}%`)
+                      .join(" · ")}
+                    {rule.extraDescription ? ` · ${rule.extraDescription}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <button className="icon-button h-9 w-9" type="button" title="Regel bearbeiten" onClick={() => setDraft(rule)}>
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    className="icon-button h-9 w-9"
+                    type="button"
+                    title="Regel loschen"
+                    onClick={() => onChange(rules.filter((candidate) => candidate.id !== rule.id))}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </article>
+            ))
+          : null}
+      </div>
+      <p className="border-t border-line px-3 py-2 text-xs text-ink/55">
+        Artikelregeln haben Vorrang vor Kategorien. Einzelne Betrage konnen im Analysevorschlag immer angepasst werden.
+      </p>
+    </section>
+  );
+}
+
+function newReceiptAssignmentRule(): ReceiptAssignmentRule {
+  return {
+    id: crypto.randomUUID(),
+    target: "item",
+    match: "",
+    shares: Object.fromEntries(roommateIds.map((roommateId, index) => [roommateId, index === 0 ? 100 : 0])),
+    extraDescription: null,
+  };
 }
 
 function ExpensePanel({
@@ -845,12 +1075,19 @@ function TasksView({
 }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingChore, setEditingChore] = useState<Chore | null>(null);
+  const [rotationFormOpen, setRotationFormOpen] = useState(false);
+  const [editingRotation, setEditingRotation] = useState<Rotation | null>(null);
   const chores = data?.chores ?? [];
-  const laundry = data?.laundry ?? defaultLaundryRotation();
+  const rotations = data?.rotations ?? [];
 
   function openChore(chore?: Chore) {
     setEditingChore(chore ?? null);
     setFormOpen(true);
+  }
+
+  function openRotation(rotation?: Rotation) {
+    setEditingRotation(rotation ?? null);
+    setRotationFormOpen(true);
   }
 
   return (
@@ -860,23 +1097,43 @@ function TasksView({
           <h2 className="section-title">Aufgaben</h2>
           <p className="section-subtitle">Wiederkehrende Aufgaben und einfache Rotationen.</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => openChore()}>
-          <Plus size={18} />
-          Aufgabe
-        </button>
+        <div className="flex gap-2">
+          <button className="secondary-button" type="button" onClick={() => openRotation()}>
+            <Repeat size={18} />
+            Rad
+          </button>
+          <button className="primary-button" type="button" onClick={() => openChore()}>
+            <Plus size={18} />
+            Aufgabe
+          </button>
+        </div>
       </div>
 
-      <LaundryCard
-        laundry={laundry}
-        onComplete={async () => {
-          try {
-            await api("/api/tasks/laundry/complete", { method: "POST" });
-            onChanged();
-          } catch (unknownError) {
-            onError(readError(unknownError));
-          }
-        }}
-      />
+      <section className="grid gap-4 md:grid-cols-2" aria-label="Rotationen">
+        {rotations.map((rotation) => (
+          <RotationCard
+            key={rotation.id}
+            rotation={rotation}
+            onEdit={() => openRotation(rotation)}
+            onComplete={async () => {
+              try {
+                await api(`/api/tasks/rotations/${rotation.id}/complete`, { method: "POST" });
+                onChanged();
+              } catch (unknownError) {
+                onError(readError(unknownError));
+              }
+            }}
+            onDelete={async () => {
+              try {
+                await api(`/api/tasks/rotations/${rotation.id}`, { method: "DELETE" });
+                onChanged();
+              } catch (unknownError) {
+                onError(readError(unknownError));
+              }
+            }}
+          />
+        ))}
+      </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
         {(["overdue", "today", "upcoming"] as const).map((status) => (
@@ -945,58 +1202,157 @@ function TasksView({
           onError={onError}
         />
       ) : null}
+
+      {rotationFormOpen ? (
+        <RotationPanel
+          rotation={editingRotation}
+          onClose={() => setRotationFormOpen(false)}
+          onSaved={() => {
+            setRotationFormOpen(false);
+            setEditingRotation(null);
+            onChanged();
+          }}
+          onError={onError}
+        />
+      ) : null}
     </div>
   );
 }
 
-function LaundryCard({
-  laundry,
+function RotationCard({
+  rotation,
+  onEdit,
   onComplete,
+  onDelete,
 }: {
-  laundry: LaundryRotation;
+  rotation: Rotation;
+  onEdit: () => void;
   onComplete: () => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
-  const assignee = findRoommate(currentAssigneeId(laundry));
-  const lastCompletedBy = laundry.lastCompletedBy ? findRoommate(laundry.lastCompletedBy) : null;
+  const assignee = findRoommate(currentAssigneeId(rotation));
+  const lastCompletedBy = rotation.lastCompletedBy ? findRoommate(rotation.lastCompletedBy) : null;
 
   return (
-    <section className="rounded-md border border-line bg-white" data-testid="laundry-card">
-      <div className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-mint text-moss">
-            <WashingMachine size={22} />
-          </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-semibold">Wäsche</h3>
-              <span className="rounded-full bg-cloud px-2 py-1 text-xs font-semibold text-ink/70">
-                Keine feste Fälligkeit
-              </span>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2 text-sm text-ink/75">
-              <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
-                <Users size={14} />
-                <span data-testid="laundry-current">{assignee?.name ?? "Unbekannt"}</span>
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
-                <Repeat size={14} />
-                {laundry.participantIds.map(nameFor).join(" -> ")}
-              </span>
-              {laundry.lastCompletedAt ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
-                  <CheckCircle2 size={14} />
-                  {formatDate(laundry.lastCompletedAt.slice(0, 10))} · {lastCompletedBy?.name ?? "Unbekannt"}
-                </span>
-              ) : null}
-            </div>
-          </div>
+    <article className="overflow-hidden rounded-md border border-line bg-white" data-testid="rotation-card">
+      <div className="flex items-start justify-between gap-3 border-b border-line bg-mint/25 px-4 py-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-lg font-semibold">{rotation.title}</h3>
+          <p className="mt-0.5 line-clamp-2 text-xs text-ink/55">
+            {rotation.description || "Keine feste Fälligkeit"}
+          </p>
         </div>
-        <button className="primary-button md:self-center" type="button" onClick={() => void onComplete()}>
+        <div className="flex shrink-0 gap-1">
+          <button className="icon-button h-8 w-8" type="button" title={`${rotation.title} bearbeiten`} onClick={onEdit}>
+            <Pencil size={15} />
+          </button>
+          <button
+            className="icon-button h-8 w-8"
+            type="button"
+            title={`${rotation.title} löschen`}
+            onClick={() => void onDelete()}
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
+        <div className="relative mx-auto grid h-24 w-24 shrink-0 place-items-center rounded-full border border-moss/25 bg-cloud sm:mx-0">
+          <span className="absolute inset-2 rounded-full border border-dashed border-moss/35" />
+          <span className="relative grid h-14 w-14 place-items-center rounded-full bg-moss text-sm font-semibold text-white shadow-soft">
+            {assignee?.initials ?? "?"}
+          </span>
+          <Repeat className="absolute -bottom-1 -right-1 rounded-full border border-line bg-white p-1.5 text-moss" size={28} />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/45">Jetzt dran</p>
+          <p className="mt-0.5 text-xl font-semibold" data-testid="rotation-current">{assignee?.name ?? "Unbekannt"}</p>
+          <p className="mt-2 truncate text-xs text-ink/55" title={rotation.participantIds.map(nameFor).join(" → ")}>
+            {rotation.participantIds.map(nameFor).join(" → ")}
+          </p>
+          {rotation.lastCompletedAt ? (
+            <p className="mt-1 text-xs text-ink/45">
+              Zuletzt {formatDate(rotation.lastCompletedAt.slice(0, 10))} · {lastCompletedBy?.name ?? "Unbekannt"}
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="border-t border-line px-4 py-3">
+        <button className="primary-button w-full" type="button" onClick={() => void onComplete()}>
           <CheckCircle2 size={17} />
-          Wäsche erledigt
+          {rotation.title} erledigt
         </button>
       </div>
-    </section>
+    </article>
+  );
+}
+
+function RotationPanel({
+  rotation,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  rotation: Rotation | null;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const [form, setForm] = useState<RotationForm>(() =>
+    rotation
+      ? { title: rotation.title, description: rotation.description, participantIds: rotation.participantIds }
+      : defaultRotationForm(),
+  );
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    try {
+      await api(rotation ? `/api/tasks/rotations/${rotation.id}` : "/api/tasks/rotations", {
+        method: rotation ? "PATCH" : "POST",
+        body: JSON.stringify(form),
+      });
+      onSaved();
+    } catch (unknownError) {
+      onError(readError(unknownError));
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-20 grid bg-ink/40 p-3 sm:place-items-center">
+      <section className="w-full rounded-md border border-line bg-white p-4 shadow-soft sm:max-w-lg sm:p-5">
+        <FormHeader title={rotation ? "Rad bearbeiten" : "Neues Rad"} onClose={onClose} />
+        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+          <label className="block">
+            <span className="label">Name</span>
+            <input
+              className="input"
+              required
+              value={form.title}
+              onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
+            />
+          </label>
+          <label className="block">
+            <span className="label">Notiz</span>
+            <textarea
+              className="input min-h-20"
+              value={form.description}
+              onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+            />
+          </label>
+          <RoommateChecks
+            selected={form.participantIds}
+            onChange={(participantIds) => setForm((current) => ({ ...current, participantIds }))}
+          />
+          <div className="flex justify-end gap-2 border-t border-line pt-4">
+            <button className="secondary-button" type="button" onClick={onClose}>Abbrechen</button>
+            <button className="primary-button" type="submit">Speichern</button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -1048,45 +1404,46 @@ function ChorePanel({
             selected={form.participantIds}
             onChange={(participantIds) => setForm((current) => ({ ...current, participantIds }))}
           />
-          <div className="grid gap-3 sm:grid-cols-[1fr_160px_160px]">
-            <label className="block">
-              <span className="label">Alle</span>
-              <input
-                className="input"
-                type="number"
-                min={1}
-                value={form.frequencyInterval}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    frequencyInterval: Number(event.target.value),
-                  }))
-                }
-              />
-            </label>
-            <label className="block">
-              <span className="label">Einheit</span>
-              <select
-                className="input"
-                value={form.frequencyUnit}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    frequencyUnit: event.target.value as FrequencyUnit,
-                  }))
-                }
-              >
-                <option value="day">Tage</option>
-                <option value="week">Wochen</option>
-                <option value="month">Monate</option>
-              </select>
-            </label>
-            <DateInput
-              label="Fallig am"
-              value={form.nextDueDate}
-              onChange={(value) => setForm((current) => ({ ...current, nextDueDate: value }))}
-            />
-          </div>
+          {form.scheduleWeekday ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="label">Alle (Wochen)</span>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  value={form.frequencyInterval}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      frequencyInterval: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block">
+                <span className="label">Wochentag</span>
+                <select
+                  className="input"
+                  value={form.scheduleWeekday}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      scheduleWeekday: event.target.value as Weekday,
+                    }))
+                  }
+                >
+                  {weekdayOptions.map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : (
+            <p className="rounded bg-cloud px-3 py-2 text-sm text-ink/70">
+              Bestehender {frequencyLabel(form.frequencyInterval, chore?.frequencyUnit ?? "month")}-Rhythmus bleibt unverändert.
+            </p>
+          )}
           <label className="flex items-center gap-2 text-sm font-medium">
             <input
               className="rounded border-line text-moss focus:ring-moss"
@@ -1188,7 +1545,7 @@ function ChoreRow({
       <div className="mt-3 flex flex-wrap gap-2 text-sm text-ink/75">
         <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
           <CalendarDays size={14} />
-          {formatDate(chore.nextDueDate)}
+          {chore.scheduleWeekday ? weekdayLabel(chore.scheduleWeekday) : formatDate(chore.nextDueDate)}
         </span>
         <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
           <Repeat size={14} />
@@ -1219,43 +1576,205 @@ function LedgerRow({
   onDelete: () => Promise<void>;
 }) {
   const isExpense = transaction.type === "expense";
+  const receiptItems = transaction.receiptItems ?? [];
+  const hasReceiptDetails = receiptItems.length > 0 || Boolean(transaction.receiptUpload);
 
   return (
-    <article className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-mint text-moss">
-            {isExpense ? <Receipt size={17} /> : <WalletCards size={17} />}
-          </span>
-          <h4 className="font-semibold">{transaction.description}</h4>
-        </div>
-        <p className="mt-1 text-sm text-ink/70">
-          {formatDate(transaction.paidAt)} ·{" "}
-          {isExpense
-            ? `bezahlt von ${nameFor(transaction.paidBy)}`
-            : `${nameFor(transaction.fromRoommateId)} an ${nameFor(transaction.toRoommateId)}`}
-        </p>
-        {isExpense ? (
-          <p className="mt-1 text-xs text-ink/60">
-            {transaction.splits.map((split) => `${nameFor(split.roommateId)} ${formatMoney(split.owedCents)}`).join(" · ")}
-          </p>
-        ) : null}
-      </div>
-      <div className="flex items-center justify-between gap-3 sm:justify-end">
-        <span className="text-lg font-semibold">{formatMoney(transaction.amountCents)}</span>
-        {isExpense ? (
-          <div className="flex gap-1">
-            <button className="icon-button h-8 w-8" type="button" title="Bearbeiten" onClick={onEdit}>
-              <Pencil size={15} />
-            </button>
-            <button className="icon-button h-8 w-8" type="button" title="Loschen" onClick={() => void onDelete()}>
-              <Trash2 size={15} />
-            </button>
+    <article className="p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-mint text-moss">
+              {isExpense ? <Receipt size={17} /> : <WalletCards size={17} />}
+            </span>
+            <h4 className="font-semibold">{transaction.description}</h4>
           </div>
-        ) : null}
+          <p className="mt-1 text-sm text-ink/70">
+            {formatDate(transaction.paidAt)} ·{" "}
+            {isExpense
+              ? `bezahlt von ${nameFor(transaction.paidBy)}`
+              : `${nameFor(transaction.fromRoommateId)} an ${nameFor(transaction.toRoommateId)}`}
+          </p>
+          {isExpense ? (
+            <p className="mt-1 text-xs text-ink/60">
+              {transaction.splits.map((split) => `${nameFor(split.roommateId)} ${formatMoney(split.owedCents)}`).join(" · ")}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex items-center justify-between gap-3 sm:justify-end">
+          <span className="text-lg font-semibold">{formatMoney(transaction.amountCents)}</span>
+          {isExpense ? (
+            <div className="flex gap-1">
+              <button className="icon-button h-8 w-8" type="button" title="Bearbeiten" onClick={onEdit}>
+                <Pencil size={15} />
+              </button>
+              <button className="icon-button h-8 w-8" type="button" title="Loschen" onClick={() => void onDelete()}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
+
+      {isExpense && hasReceiptDetails ? (
+        <details className="group mt-2 border-t border-line/70 pt-1">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1.5 text-xs font-medium text-ink/55 transition-colors hover:text-ink/75 [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-2">
+              <FileText size={14} className="text-moss/70" />
+              Rechnungsdetails
+              {receiptItems.length ? (
+                <span className="text-ink/40">· {receiptItems.length} Positionen</span>
+              ) : null}
+            </span>
+            <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="pt-2">
+            {transaction.receiptUpload ? (
+              <a
+                className="mb-2 flex items-center justify-between gap-3 rounded bg-cloud/70 px-2.5 py-2 transition-colors hover:bg-mint/40"
+                href={transaction.receiptUpload.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <FileText size={16} className="shrink-0 text-moss/80" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs font-semibold">{transaction.receiptUpload.fileName}</span>
+                    <span className="block text-xs text-ink/55">
+                      Original · {formatFileSize(transaction.receiptUpload.sizeBytes)}
+                    </span>
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-moss">
+                  Öffnen <ExternalLink size={14} />
+                </span>
+              </a>
+            ) : (
+              <p className="mb-2 border-l-2 border-line px-2 py-1 text-xs text-ink/45">
+                Keine Originaldatei gespeichert.
+              </p>
+            )}
+
+            {receiptItems.length ? (
+              <div className="divide-y divide-line/70">
+                {receiptItems.map((item, index) => (
+                  <div className="grid gap-2 py-2 sm:grid-cols-[minmax(0,1fr)_auto]" key={`${item.name}-${index}`}>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="text-sm font-semibold">{item.normalizedName}</p>
+                        <span className="rounded border border-moss/15 px-1.5 py-0.5 text-[10px] font-medium text-moss/80">
+                          {item.category}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-xs text-ink/50">
+                        {item.name}
+                        {item.quantity ? <span className="ml-2 font-normal text-ink/50">{item.quantity}</span> : null}
+                      </p>
+                      <p className="mt-0.5 text-xs text-ink/55">{item.assignmentReason}</p>
+                      <p className="mt-1 text-xs text-ink/70">
+                        {item.splits.map((split) => `${nameFor(split.roommateId)} ${formatMoney(split.amountCents)}`).join(" · ")}
+                      </p>
+                    </div>
+                    <span className={`text-sm font-semibold ${item.amountCents < 0 ? "text-moss" : "text-ink"}`}>
+                      {formatMoney(item.amountCents)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
     </article>
   );
+}
+
+function ProductTrackingCard({ transactions }: { transactions: FinanceTransaction[] }) {
+  const { categories, products, positionCount } = summarizeProductTracking(transactions);
+  const largestCategory = Math.max(...categories.map((entry) => Math.abs(entry.amountCents)), 1);
+
+  return (
+    <section className="overflow-hidden rounded-md border border-line bg-white" aria-labelledby="product-tracking-title">
+      <div className="border-b border-line bg-mint/35 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Tags size={18} className="text-moss" />
+            <h3 id="product-tracking-title" className="font-semibold">Warengruppen</h3>
+          </div>
+          <span className="text-xs font-semibold text-ink/55">{positionCount} Positionen</span>
+        </div>
+        <p className="mt-1 text-xs text-ink/60">Generalisiert über alle importierten Rechnungen.</p>
+      </div>
+
+      {categories.length ? (
+        <div className="space-y-3 p-4">
+          {categories.map((entry) => (
+            <div key={entry.name}>
+              <div className="mb-1 flex items-baseline justify-between gap-3 text-sm">
+                <span className="truncate font-medium">{entry.name}</span>
+                <span className={entry.amountCents < 0 ? "font-semibold text-moss" : "font-semibold"}>
+                  {formatMoney(entry.amountCents)}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-cloud">
+                <div
+                  className={`h-full rounded-full ${entry.amountCents < 0 ? "bg-coral" : "bg-moss"}`}
+                  style={{ width: `${Math.max(3, (Math.abs(entry.amountCents) / largestCategory) * 100)}%` }}
+                />
+              </div>
+            </div>
+          ))}
+
+          <details className="group border-t border-line pt-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-moss [&::-webkit-details-marker]:hidden">
+              Generalisierte Produkte
+              <ChevronDown size={15} className="transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="mt-3 divide-y divide-line rounded-md border border-line">
+              {products.map((entry) => (
+                <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs" key={entry.name}>
+                  <span className="min-w-0 truncate">
+                    <strong>{entry.name}</strong>
+                    <span className="ml-1 text-ink/45">× {entry.count}</span>
+                  </span>
+                  <span className="shrink-0 font-semibold">{formatMoney(entry.amountCents)}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      ) : (
+        <EmptyState label="Noch keine Produktdaten." compact />
+      )}
+    </section>
+  );
+}
+
+function summarizeProductTracking(transactions: FinanceTransaction[]) {
+  const categoryTotals = new Map<string, number>();
+  const productTotals = new Map<string, { amountCents: number; count: number }>();
+  let positionCount = 0;
+
+  for (const transaction of transactions) {
+    for (const item of transaction.receiptItems ?? []) {
+      positionCount += 1;
+      categoryTotals.set(item.category, (categoryTotals.get(item.category) ?? 0) + item.amountCents);
+      const current = productTotals.get(item.normalizedName) ?? { amountCents: 0, count: 0 };
+      current.amountCents += item.amountCents;
+      current.count += 1;
+      productTotals.set(item.normalizedName, current);
+    }
+  }
+
+  return {
+    positionCount,
+    categories: [...categoryTotals.entries()]
+      .map(([name, amountCents]) => ({ name, amountCents }))
+      .sort((left, right) => Math.abs(right.amountCents) - Math.abs(left.amountCents)),
+    products: [...productTotals.entries()]
+      .map(([name, value]) => ({ name, ...value }))
+      .sort((left, right) => right.amountCents - left.amountCents || left.name.localeCompare(right.name, "de")),
+  };
 }
 
 function BalanceCard({ roommateId, cents }: { roommateId: string; cents: number }) {
@@ -1263,12 +1782,16 @@ function BalanceCard({ roommateId, cents }: { roommateId: string; cents: number 
   const label = cents > 0 ? "bekommt" : cents < 0 ? "zahlt" : "ausgeglichen";
 
   return (
-    <article className="rounded-md border border-line bg-white p-4">
-      <div className="flex items-center justify-between gap-3">
+    <article data-testid="balance-card" className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-line bg-white p-3 sm:p-4">
+      <div className="min-w-0">
         <PersonBadge roommate={roommate ?? null} />
-        <span className={cents > 0 ? "text-moss" : cents < 0 ? "text-coral" : "text-ink/60"}>{label}</span>
       </div>
-      <p className="mt-4 text-2xl font-semibold tracking-normal">{formatMoney(Math.abs(cents))}</p>
+      <div className="shrink-0 text-right">
+        <span className={`block text-xs ${cents > 0 ? "text-moss" : cents < 0 ? "text-coral" : "text-ink/50"}`}>
+          {label}
+        </span>
+        <p className="mt-0.5 text-lg font-semibold tracking-normal sm:text-xl">{formatMoney(Math.abs(cents))}</p>
+      </div>
     </article>
   );
 }
@@ -1436,9 +1959,9 @@ async function api<T = unknown>(path: string, options: RequestInit = {}): Promis
   return (await response.json()) as T;
 }
 
-async function apiForm<T = unknown>(path: string, body: FormData): Promise<T> {
+async function apiForm<T = unknown>(path: string, body: FormData, method = "POST"): Promise<T> {
   const response = await fetch(path, {
-    method: "POST",
+    method,
     credentials: "include",
     body,
   });
@@ -1487,7 +2010,11 @@ async function submitExpense(form: ExpenseForm, id?: string): Promise<void> {
   });
 }
 
-async function createExpenseFromReceipt(form: ReceiptImportForm, analysis: ReceiptAnalysis): Promise<void> {
+async function createExpenseFromReceipt(
+  form: ReceiptImportForm,
+  analysis: ReceiptAnalysis,
+  originalFile: File | null,
+): Promise<void> {
   if (analysis.totalCents <= 0 || analysis.roommateTotals.length === 0) {
     throw new Error("Die Analyse enthalt keine speicherbare Aufteilung.");
   }
@@ -1495,7 +2022,7 @@ async function createExpenseFromReceipt(form: ReceiptImportForm, analysis: Recei
     throw new Error("Die Positionsaufteilungen passen nicht zur Rechnung.");
   }
 
-  await api("/api/finance/expenses", {
+  const { transaction } = await api<{ transaction: FinanceTransaction }>("/api/finance/expenses", {
     method: "POST",
     body: JSON.stringify({
       description: form.description.trim() || analysis.merchant || "Rechnung",
@@ -1508,8 +2035,15 @@ async function createExpenseFromReceipt(form: ReceiptImportForm, analysis: Recei
         roommateId: split.roommateId,
         owedCents: split.amountCents,
       })),
+      receiptItems: analysis.items,
     }),
   });
+
+  if (originalFile) {
+    const upload = new FormData();
+    upload.set("receipt", originalFile);
+    await apiForm(`/api/finance/expenses/${transaction.id}/receipt-file`, upload, "PUT");
+  }
 }
 
 function updateReceiptItemSplit(
@@ -1533,7 +2067,7 @@ function updateReceiptItemSplit(
           roommateId: id,
           amountCents: splitByRoommate.get(id) ?? 0,
         }))
-        .filter((split) => split.amountCents > 0),
+        .filter((split) => split.amountCents !== 0),
     };
   });
 
@@ -1555,7 +2089,7 @@ function receiptItemIsValid(item: ReceiptAnalysis["items"][number]): boolean {
 
 function centsFromNumberInput(value: string): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100)) : 0;
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
 }
 
 async function submitSettlement(form: SettlementForm): Promise<void> {
@@ -1614,9 +2148,8 @@ function choreFormFromChore(chore: Chore): ChoreForm {
     title: chore.title,
     description: chore.description,
     participantIds: chore.participantIds,
-    frequencyUnit: chore.frequencyUnit,
     frequencyInterval: chore.frequencyInterval,
-    nextDueDate: chore.nextDueDate,
+    scheduleWeekday: chore.scheduleWeekday,
     isActive: chore.isActive,
   };
 }
@@ -1635,10 +2168,30 @@ function nameFor(roommateId?: string): string {
   return findRoommate(roommateId)?.name ?? roommateId;
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB`;
+}
+
 function frequencyLabel(interval: number, unit: FrequencyUnit): string {
   const label = unit === "day" ? "Tag" : unit === "week" ? "Woche" : "Monat";
   const plural = interval === 1 ? label : `${label}e`;
   return `${interval} ${plural}`;
+}
+
+const weekdayOptions: [Weekday, string][] = [
+  ["monday", "Montag"],
+  ["tuesday", "Dienstag"],
+  ["wednesday", "Mittwoch"],
+  ["thursday", "Donnerstag"],
+  ["friday", "Freitag"],
+  ["saturday", "Samstag"],
+  ["sunday", "Sonntag"],
+];
+
+function weekdayLabel(weekday: Weekday): string {
+  return weekdayOptions.find(([value]) => value === weekday)?.[1] ?? weekday;
 }
 
 function readError(error: unknown): string {
