@@ -1,18 +1,18 @@
 # Flat Web
 
-Local web app for shared-flat finances and chores. It runs as one Bun service and is intended to be exposed only inside a Tailnet.
+Local web app for shared-flat finances and chores. It runs as one Bun service behind authenticated ingress.
 
 ## Local architecture
 
 - React/Vite frontend, built into `dist/`
 - Hono API served by Bun
 - SQLite data in `data/flat.sqlite`
-- Receipt analysis through the authenticated local `codex` CLI
-- No Cloudflare, Wrangler, D1, or Workers AI dependency
+- Receipt analysis through a private OpenAI-compatible Responses API
+- No Wrangler, D1, or Workers AI runtime dependency
 
 ## Setup
 
-Requirements: Bun, Poppler (`pdftoppm`), and an authenticated Codex CLI on the service account.
+Requirements: Bun, Poppler (`pdftoppm`), and server-only `OPENAI_BASE_URL` / `OPENAI_API_KEY` configuration.
 
 ```bash
 bun install
@@ -55,20 +55,15 @@ The server creates the SQLite database and applies unapplied files from `migrati
 bun run db:migrate
 ```
 
-Back up `data/flat.sqlite` (and its `-wal`/`-shm` companions while the service is running), or stop the service before copying the main file. Override the location with `FLAT_DATABASE_PATH`.
+Use SQLite’s online backup API for a consistent running-service backup, or stop the service before copying the database and any WAL companions. Override the location with `FLAT_DATABASE_PATH`.
 
 ## Receipt analysis
 
 Assignment rules are structured records in SQLite and can be added, edited, deleted, and saved directly in the receipt dialog. Item rules take precedence over category rules; unmatched items are split equally.
 
-The API invokes `codex exec` with:
+The server uses native fetch against `${OPENAI_BASE_URL}/responses`, with `gpt-5.6-sol` and low reasoning. Set `OPENAI_BASE_URL=https://inference.tail685c39.ts.net/v1` and provision `OPENAI_API_KEY` in the private service environment (`/srv/app-data/flat/flat.env`, mode 0600); never put credentials in Git or browser code.
 
-- an ephemeral session;
-- a read-only sandbox in a temporary directory;
-- the receipt image or locally rendered PDF pages, when supplied;
-- a strict receipt JSON schema.
-
-The temporary image, schema, and model response are removed after every request. The service account must already be logged into Codex (`codex login status`). A receipt request can take up to three minutes.
+Requests include the unchanged receipt prompt and strict JSON schema, with no tools. Images are sent as data URLs; PDFs are locally rasterized with Poppler at 160 DPI, up to eight pages. Temporary files are removed after each request. Inference has a three-minute deadline, a 16,384-token output ceiling and a 2 MB response limit. Responses are validated against the requested schema before existing receipt normalization. Provider errors are not exposed.
 
 ## Checks
 

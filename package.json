@@ -12,7 +12,7 @@
     "start": "bun run build && bun server/index.ts",
     "serve": "bun server/index.ts",
     "typecheck": "tsc -b",
-    "test": "vitest run --config vitest.config.ts && bun test server/db.bun.test.ts server/app.bun.test.ts server/codex.bun.test.ts",
+    "test": "vitest run --config vitest.config.ts && bun test server/db.bun.test.ts server/app.bun.test.ts server/inference.bun.test.ts",
     "test:e2e": "playwright test",
     "db:migrate": "bun server/migrate.ts",
     "import:receipts": "bun scripts/import-receipts.ts"

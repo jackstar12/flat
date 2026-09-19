@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { analyzeReceiptWithCodex } from "./codex";
+import { analyzeReceipt } from "./inference";
 import type { LocalDatabase } from "./db";
 import { household, roommateIds, roommates, findRoommate } from "../src/shared/config";
 import {
@@ -37,7 +37,7 @@ type Env = {
   PROXY_TOKEN: string;
   SESSION_SECRET: string;
   TRUSTED_ORIGINS: readonly string[];
-  analyzeReceipt: typeof analyzeReceiptWithCodex;
+  analyzeReceipt: typeof analyzeReceipt;
 };
 
 type AppBindings = {
@@ -1387,7 +1387,7 @@ function parseModelJson(value: unknown): unknown {
   }
 
   if (typeof value !== "string") {
-    throw new HTTPError(400, "Codex hat keine lesbare JSON-Antwort geliefert.");
+    throw new HTTPError(400, "Die Rechnungsanalyse hat keine lesbare JSON-Antwort geliefert.");
   }
 
   try {
@@ -1395,12 +1395,12 @@ function parseModelJson(value: unknown): unknown {
   } catch {
     const match = /```(?:json)?\s*([\s\S]*?)```/.exec(value) ?? /(\{[\s\S]*\})/.exec(value);
     if (!match) {
-      throw new HTTPError(400, "Codex hat keine JSON-Antwort geliefert.");
+      throw new HTTPError(400, "Die Rechnungsanalyse hat keine JSON-Antwort geliefert.");
     }
     try {
       return JSON.parse(match[1]);
     } catch {
-      throw new HTTPError(400, "Codex hat keine gultige JSON-Antwort geliefert.");
+      throw new HTTPError(400, "Die Rechnungsanalyse hat keine gultige JSON-Antwort geliefert.");
     }
   }
 }

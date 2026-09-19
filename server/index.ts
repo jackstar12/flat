@@ -1,5 +1,5 @@
 import { resolve, sep } from "node:path";
-import { analyzeReceiptWithCodex } from "./codex";
+import { analyzeReceipt } from "./inference";
 import { readConfig } from "./config";
 import { LocalDatabase } from "./db";
 import { hasProxyProof, isHealthRequest } from "./proxy";
@@ -13,7 +13,7 @@ const bindings = {
   PROXY_TOKEN: config.proxyToken,
   SESSION_SECRET: config.sessionSecret,
   TRUSTED_ORIGINS: config.trustedOrigins,
-  analyzeReceipt: analyzeReceiptWithCodex,
+  analyzeReceipt: analyzeReceipt,
 };
 const apiOnly = process.argv.includes("--api-only");
 const distDirectory = resolve(import.meta.dir, "../dist");

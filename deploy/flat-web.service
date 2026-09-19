@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/jacksn/flat
-EnvironmentFile=/home/jacksn/flat/.env
+EnvironmentFile=/srv/app-data/flat/flat.env
 Environment=PATH=/home/jacksn/.local/bin:/home/jacksn/.bun/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/jacksn/.bun/bin/bun server/index.ts
 Restart=on-failure
