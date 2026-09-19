@@ -8,7 +8,7 @@ afterAll(() => {
   if (original.url === undefined) delete process.env.OPENAI_BASE_URL; else process.env.OPENAI_BASE_URL = original.url;
 });
 const request = { prompt: "synthetic", document: null, outputSchema: { type: "object", additionalProperties: false, required: ["total"], properties: { total: { type: "integer" } } } };
-const envelope = (text: string, status = "completed") => JSON.stringify({ status, output: [{ type: "message", content: [{ type: "output_text", text }] }] });
+const envelope = (text: string, status = "completed") => JSON.stringify({ status, output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text }] }] });
 function fake(body: string, status = 200): typeof fetch { return (async () => new Response(body, { status })) as unknown as typeof fetch; }
 describe("receipt inference", () => {
   test("preserves model, schema, vision and disables tools", async () => {
@@ -27,6 +27,35 @@ describe("receipt inference", () => {
   for (const [name, body] of [["invalid JSON", "bad"], ["invalid schema", envelope('{"total":"bad"}')], ["extra properties", envelope('{"total":1,"extra":true}')], ["incomplete", envelope('{"total":1}', "incomplete")], ["empty", JSON.stringify({ status: "completed", output: [] })], ["oversized", "x".repeat(2_000_001)]]) {
     test(`rejects ${name}`, async () => { await expect(analyzeReceipt(request, { fetch: fake(body) })).rejects.toThrow("Rechnungsanalyse"); });
   }
+  const validMessage = { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: '{"total":100}' }] };
+  const adversarialEnvelopes: [string, Record<string, unknown>][] = [
+    ["non-null error alongside valid output", { error: { message: "private provider details" } }],
+    ["false error value", { error: false }],
+    ["mixed function call and valid output", { output: [{ type: "function_call", name: "tool", arguments: "{}" }, validMessage] }],
+    ["unexpected output after valid output", { output: [validMessage, { type: "web_search_call" }] }],
+    ["unknown output item", { output: [validMessage, { type: "unknown" }] }],
+    ["null output item", { output: [validMessage, null] }],
+    ["incomplete assistant message", { output: [{ ...validMessage, status: "incomplete" }] }],
+    ["in-progress assistant message", { output: [{ ...validMessage, status: "in_progress" }] }],
+    ["missing message status", { output: [{ ...validMessage, status: undefined }] }],
+    ["non-assistant message", { output: [{ ...validMessage, role: "user" }] }],
+    ["missing message role", { output: [{ ...validMessage, role: undefined }] }],
+    ["refusal mixed with valid text", { output: [{ ...validMessage, content: [...validMessage.content, { type: "refusal", refusal: "private refusal" }] }] }],
+    ["refusal alone", { output: [{ ...validMessage, content: [{ type: "refusal", refusal: "private refusal" }] }] }],
+    ["non-string text", { output: [{ ...validMessage, content: [{ type: "output_text", text: 100 }] }] }],
+    ["empty message alongside valid output", { output: [validMessage, { ...validMessage, content: [] }] }],
+    ["reasoning without assistant text", { output: [{ type: "reasoning", summary: [] }] }],
+  ];
+  for (const [name, overrides] of adversarialEnvelopes) {
+    test(`rejects ${name}`, async () => {
+      const body = JSON.stringify({ status: "completed", output: [validMessage], ...overrides });
+      await expect(analyzeReceipt(request, { fetch: fake(body) })).rejects.toThrow("Rechnungsanalyse");
+    });
+  }
+  test("accepts reasoning plus completed assistant text with null error", async () => {
+    const body = JSON.stringify({ status: "completed", error: null, output: [{ type: "reasoning", summary: [] }, validMessage] });
+    expect(await analyzeReceipt(request, { fetch: fake(body) })).toBe('{"total":100}');
+  });
   test("rasterizes PDFs and caps attachments at eight", async () => {
     const objects = ["<< /Type /Catalog /Pages 2 0 R >>", `<< /Type /Pages /Count 9 /Kids [${Array.from({ length: 9 }, (_, i) => `${i + 3} 0 R`).join(" ")}] >>`, ...Array.from({ length: 9 }, () => "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] /Resources << >> >>")];
     let pdf = "%PDF-1.4\n";

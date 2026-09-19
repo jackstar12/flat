@@ -60,11 +60,21 @@ export async function analyzeReceipt(request: ReceiptRequest, options: { fetch?:
       }
     } finally { await reader.cancel(); }
     const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (envelope.status !== "completed" || !Array.isArray(envelope.output)) throw new Error("Rechnungsanalyse ist unvollstandig.");
-    const messages = envelope.output.filter((item: { type: string }) => item.type === "message");
-    const parts = messages.flatMap((item: { content: unknown[] }) => item.content);
-    if (!parts.length || parts.some((part: { type: string }) => part.type !== "output_text")) throw new Error("Rechnungsanalyse hat keine Textantwort geliefert.");
-    const output = parts.map((part: { text: string }) => part.text).join("");
+    if (envelope.error != null || envelope.status !== "completed" || !Array.isArray(envelope.output)) throw new Error("Rechnungsanalyse ist unvollstandig.");
+    const texts: string[] = [];
+    for (const item of envelope.output) {
+      if (item?.type === "reasoning") continue;
+      if (item?.type !== "message" || item.role !== "assistant" || item.status !== "completed") {
+        throw new Error("Rechnungsanalyse hat eine unerwartete Ausgabe geliefert.");
+      }
+      if (!Array.isArray(item.content) || !item.content.length) throw new Error("Rechnungsanalyse hat keine Textantwort geliefert.");
+      for (const part of item.content) {
+        if (part?.type !== "output_text" || typeof part.text !== "string") throw new Error("Rechnungsanalyse hat keine Textantwort geliefert.");
+        texts.push(part.text);
+      }
+    }
+    if (!texts.length) throw new Error("Rechnungsanalyse hat keine Textantwort geliefert.");
+    const output = texts.join("");
     const parsed = JSON.parse(output);
     if (!z.fromJSONSchema(request.outputSchema).safeParse(parsed).success) throw new Error("Rechnungsanalyse hat ein ungultiges Schema geliefert.");
     return output;
