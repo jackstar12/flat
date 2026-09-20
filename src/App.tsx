@@ -127,6 +127,12 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>("finanzen");
   const [finance, setFinance] = useState<FinancePayload | null>(null);
   const [tasks, setTasks] = useState<TasksPayload | null>(null);
+  const [authExpired, setAuthExpired] = useState(false);
+  useEffect(() => {
+    const expired = () => setAuthExpired(true);
+    window.addEventListener("flat-auth-expired", expired);
+    return () => window.removeEventListener("flat-auth-expired", expired);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,15 +164,7 @@ export default function App() {
   }
 
   async function logout() {
-    await api("/api/logout", { method: "POST" });
-    setSession({
-      authenticated: false,
-      roommate: null,
-      roommates,
-      household,
-    });
-    setFinance(null);
-    setTasks(null);
+    window.location.assign("/outpost.goauthentik.io/sign_out");
   }
 
   if (loading) {
@@ -174,18 +172,20 @@ export default function App() {
   }
 
   if (!session?.authenticated) {
-    return (
-      <LoginScreen
-        onLogin={async (nextSession) => {
-          setSession(nextSession);
-          await Promise.all([loadFinance(), loadTasks()]);
-        }}
-      />
-    );
+    return <main className="grid min-h-screen place-items-center bg-cloud px-4 text-ink">
+      <section><h1 className="text-2xl">Anmeldung erforderlich</h1>
+        <p>{error ?? "Bitte erneut anmelden."}</p>
+        <a className="primary-button mt-4" href="/">Erneut anmelden</a>
+      </section>
+    </main>;
   }
 
   return (
     <div className="min-h-screen bg-cloud text-ink">
+      {authExpired && <div role="alert" className="fixed inset-x-0 top-0 z-30 border-b border-line bg-white p-4 shadow-soft">
+        Anmeldung abgelaufen. Die Anfrage wird nicht automatisch wiederholt. Bitte nach der Anmeldung den Speicherstand prüfen.
+        <a className="primary-button ml-4" href="/">Erneut anmelden</a>
+      </div>}
       <header className="border-b border-line bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -242,56 +242,6 @@ export default function App() {
         )}
       </main>
     </div>
-  );
-}
-
-function LoginScreen({ onLogin }: { onLogin: (session: SessionPayload) => Promise<void> }) {
-  const [roommateId, setRoommateId] = useState(roommates[0].id);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setPending(true);
-    setError(null);
-    try {
-      const nextSession = await api<SessionPayload>("/api/login", {
-        method: "POST",
-        body: JSON.stringify({ roommateId }),
-      });
-      await onLogin(nextSession);
-    } catch (unknownError) {
-      setError(readError(unknownError));
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <main className="grid min-h-screen bg-cloud px-4 py-8 text-ink sm:place-items-center">
-      <section className="w-full max-w-md rounded-md border border-line bg-white p-6 shadow-soft">
-        <div className="mb-6">
-          <p className="text-sm font-medium text-moss">{household.name}</p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-normal">Person wählen</h1>
-        </div>
-        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
-          <label className="block">
-            <span className="label">Person</span>
-            <select className="input" value={roommateId} onChange={(event) => setRoommateId(event.target.value)}>
-              {roommates.map((roommate) => (
-                <option key={roommate.id} value={roommate.id}>
-                  {roommate.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {error ? <p className="rounded-md bg-coral/10 px-3 py-2 text-sm text-ink">{error}</p> : null}
-          <button className="primary-button w-full" type="submit" disabled={pending}>
-            {pending ? "Weiter..." : "Weiter"}
-          </button>
-        </form>
-      </section>
-    </main>
   );
 }
 
@@ -1938,6 +1888,7 @@ function LoadingScreen() {
 async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "include",
+    redirect: "manual",
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -1945,6 +1896,10 @@ async function api<T = unknown>(path: string, options: RequestInit = {}): Promis
     },
   });
 
+  if (response.status === 401 || response.type === "opaqueredirect") {
+    window.dispatchEvent(new Event("flat-auth-expired"));
+    throw new Error("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.");
+  }
   if (!response.ok) {
     let message = "Anfrage fehlgeschlagen.";
     try {
@@ -1963,9 +1918,14 @@ async function apiForm<T = unknown>(path: string, body: FormData, method = "POST
   const response = await fetch(path, {
     method,
     credentials: "include",
+    redirect: "manual",
     body,
   });
 
+  if (response.status === 401 || response.type === "opaqueredirect") {
+    window.dispatchEvent(new Event("flat-auth-expired"));
+    throw new Error("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.");
+  }
   if (!response.ok) {
     let message = "Anfrage fehlgeschlagen.";
     try {

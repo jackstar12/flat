@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bu
 import { roommateIds } from "../src/shared/config";
 import { weekdayOfDate } from "../src/shared/tasks";
 import { app } from "./app";
+import { parseIdentityMappings } from "./identity";
+import { createHmac } from "node:crypto";
 import { parseTrustedOrigins } from "./config";
 import { LocalDatabase } from "./db";
 
 let database: LocalDatabase;
 const proxyToken = "a".repeat(64);
-const secret = "test-session-secret";
+const identity = { email: "owner@example.test", uid: "fixture-owner", roommateId: "kran" };
+const identityHeaders = { "X-Flat-Email": identity.email, "X-Flat-Uid": identity.uid };
 const origin = "http://flat.test";
 let testTime = Date.now();
 
@@ -87,17 +90,8 @@ describe("chore API", () => {
 });
 
 async function loginCookie(): Promise<string> {
-  const response = await app.request(
-    "/api/login",
-    {
-      method: "POST",
-      headers: { "X-Flat-Proxy-Token": proxyToken, Origin: origin, "Content-Type": "application/json" },
-      body: JSON.stringify({ roommateId: roommateIds[0] }),
-    },
-    bindings(),
-  );
-  expect(response.status).toBe(200);
-  return response.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+  const payload = `stadlmann.${Date.now() + 60_000}`;
+  return `flat_session=${payload}.${createHmac("sha256", "old-secret").update(payload).digest("base64url")}`;
 }
 
 async function request(path: string, cookie: string, body: unknown, method = "POST"): Promise<Response> {
@@ -105,7 +99,7 @@ async function request(path: string, cookie: string, body: unknown, method = "PO
     path,
     {
       method,
-      headers: { "X-Flat-Proxy-Token": proxyToken, Origin: origin, "Content-Type": "application/json", Cookie: cookie },
+      headers: { ...identityHeaders, "X-Flat-Proxy-Token": proxyToken, Origin: origin, "Content-Type": "application/json", Cookie: cookie },
       body: JSON.stringify(body),
     },
     bindings(),
@@ -116,79 +110,13 @@ function bindings() {
   return {
     DB: database,
     PROXY_TOKEN: proxyToken,
-    SESSION_SECRET: secret,
+    IDENTITY_MAP: [identity],
     TRUSTED_ORIGINS: [origin, "https://flat.public.test", "https://flat.private.test:8787"],
     analyzeReceipt: async () => {
       throw new Error("Receipt analysis is not used in API tests.");
     },
   };
 }
-
-
-describe("public ingress security", () => {
-  const loginBody = JSON.stringify({ roommateId: roommateIds[0] });
-  function send(path: string, method: string, requestOrigin?: string, extra: Record<string, string> = {}, body?: string) {
-    return app.request(`http://127.0.0.1:8787${path}`, {
-      method,
-      headers: { "X-Flat-Proxy-Token": proxyToken, "Content-Type": "application/json", ...(requestOrigin === undefined ? {} : { Origin: requestOrigin }), ...extra },
-      body,
-    }, bindings());
-  }
-
-  test("sets Secure cookies behind HTTP proxy for both configured HTTPS origins", async () => {
-    for (const trusted of ["https://flat.public.test", "https://flat.private.test:8787"]) {
-      const response = await send("/api/login", "POST", trusted, { "X-Forwarded-Proto": "http" }, loginBody);
-      expect(response.status).toBe(200);
-      expect(response.headers.get("set-cookie")).toContain("; Secure");
-      expect(response.headers.get("set-cookie")).toContain("HttpOnly");
-      expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
-      const cookie = response.headers.get("set-cookie")!.split(";", 1)[0];
-      const session = await send("/api/session", "GET", undefined, { Cookie: cookie });
-      expect(await session.json()).toMatchObject({ authenticated: true });
-      const logout = await send("/api/logout", "POST", trusted, { Cookie: cookie });
-      expect(logout.status).toBe(200);
-      expect(logout.headers.get("set-cookie")).toContain("; Secure");
-      expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
-    }
-  });
-
-  test("HTTP test origin ignores spoofed forwarding headers for cookie security", async () => {
-    const response = await send("/api/login", "POST", origin, { "X-Forwarded-Proto": "https", Forwarded: "proto=https;host=flat.public.test" }, loginBody);
-    expect(response.status).toBe(200);
-    expect(response.headers.get("set-cookie")).not.toContain("; Secure");
-  });
-
-  test("rejects absent, null, malformed and non-exact origins before unsafe API handlers", async () => {
-    const cookie = await loginCookie();
-    for (const untrusted of [undefined, "null", "https://evil.test", "https://flat.public.test.evil.test", "https://flat.public.test/", "http://flat.public.test", "https://flat.private.test", "https://flat.public.test, https://evil.test"]) {
-      for (const [path, method] of [["/api/login", "POST"], ["/api/logout", "POST"], ["/api/tasks", "POST"], ["/api/tasks/missing", "PATCH"], ["/api/finance/expenses/missing/receipt-file", "PUT"], ["/api/tasks/missing", "DELETE"]]) {
-        const response = await send(path, method, untrusted, { Cookie: cookie, "X-Forwarded-Host": "flat.public.test", "X-Forwarded-Proto": "https" }, loginBody);
-        expect(response.status).toBe(403);
-        expect(response.headers.get("set-cookie")).toBeNull();
-      }
-    }
-    expect((await send("/healthz", "GET")).status).toBe(200);
-    expect((await send("/api/session", "GET")).status).toBe(200);
-    expect((await send("/api/tasks", "GET", undefined, { Cookie: cookie })).status).toBe(200);
-  });
-
-  test("globally bounds login attempts including malformed bodies and successful logins", async () => {
-    for (let i = 0; i < 30; i++) {
-      const body = i === 0 ? loginBody : i === 1 ? "{}" : JSON.stringify({ roommateId: "unknown-roommate" });
-      const response = await send("/api/login", "POST", origin, { "X-Forwarded-For": `192.0.2.${i}`, "CF-Connecting-IP": `192.0.2.${i}` }, body);
-      expect(response.status).toBe(i === 0 ? 200 : 400);
-    }
-    const blocked = await send("/api/login", "POST", "https://flat.private.test:8787", { "X-Forwarded-For": "203.0.113.1" }, loginBody);
-    expect(blocked.status).toBe(429);
-    expect(blocked.headers.get("Retry-After")).toBe("900");
-    expect(blocked.headers.get("set-cookie")).toBeNull();
-    expect((await send("/api/session", "GET")).status).toBe(200);
-    setSystemTime(testTime + 899_000);
-    expect((await send("/api/login", "POST", origin, {}, loginBody)).headers.get("Retry-After")).toBe("1");
-    setSystemTime(testTime + 900_000);
-    expect((await send("/api/login", "POST", origin, {}, loginBody)).status).toBe(200);
-  });
-});
 
 
 describe("trusted origins configuration", () => {
@@ -202,31 +130,75 @@ describe("trusted origins configuration", () => {
   });
 });
 
-describe("private proxy proof", () => {
-  test("requires proof even with a valid roommate cookie; rejects spoofed and joined headers", async () => {
-    const cookie = await loginCookie();
-    for (const token of [undefined, "", "b".repeat(64), proxyToken + ", " + proxyToken, "a".repeat(63)]) {
-      for (const path of ["/api/session", "/api/finance", "/api/logout", "/api/login"]) {
-        const response = await app.request(path, {
-          method: path.endsWith("login") || path.endsWith("logout") ? "POST" : "GET",
-          headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json",
-            "X-Authentik-Username": "admin", ...(token === undefined ? {} : { "X-Flat-Proxy-Token": token }) },
-        }, bindings());
-        expect(response.status).toBe(401);
-        expect(response.headers.get("set-cookie")).toBeNull();
-      }
+describe("verified proxy identity", () => {
+  function send(path = "/api/session", extra: Record<string, string> = {}, method = "GET", body?: unknown, map = [identity]) {
+    return app.request(path, { method, headers: {
+      ...identityHeaders, "X-Flat-Proxy-Token": proxyToken, Origin: origin,
+      "Content-Type": "application/json", ...extra,
+    }, body: body === undefined ? undefined : JSON.stringify(body) }, { ...bindings(), IDENTITY_MAP: map });
+  }
+  test("recognizes existing roommate without a selectable session", async () => {
+    const response = await send();
+    expect(await response.json()).toMatchObject({ authenticated: true, roommate: { id: "kran" } });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+  });
+  test("ignores and expires a valid legacy cookie for another roommate", async () => {
+    const response = await send("/api/session", { Cookie: await loginCookie() });
+    expect(await response.json()).toMatchObject({ roommate: { id: "kran" } });
+    expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
+    expect((await send("/api/session", { Cookie: await loginCookie(), "X-Flat-Email": "" })).status).toBe(403);
+  });
+  test("rejects missing, unknown, duplicated and mismatched identity", async () => {
+    for (const extra of [
+      { "X-Flat-Email": "" }, { "X-Flat-Uid": "" },
+      { "X-Flat-Email": "unknown@example.test" }, { "X-Flat-Uid": "unknown" },
+      { "X-Flat-Email": `${identity.email}, ${identity.email}` },
+      { "X-Flat-Uid": `${identity.uid}, ${identity.uid}` },
+      { "X-Flat-Email": "", "X-Authentik-Email": identity.email, "Remote-User": "kran" },
+    ] as Record<string, string>[]) expect((await send("/api/session", extra)).status).toBe(403);
+    expect((await send("/api/session", {}, "GET", undefined, [identity, identity])).status).toBe(403);
+  });
+  test("identity spoofing cannot replace private proof", async () => {
+    for (const token of ["", "b".repeat(64), `${proxyToken}, ${proxyToken}`]) {
+      expect((await send("/api/finance", { "X-Flat-Proxy-Token": token, Cookie: await loginCookie() })).status).toBe(401);
     }
     expect((await app.request("/healthz", {}, bindings())).status).toBe(200);
     expect((await app.request("/healthz", { method: "POST" }, bindings())).status).toBe(401);
   });
-
-  test("selects a roommate without a password only after proof; retains session authorization", async () => {
-    const headers = { Origin: origin, "Content-Type": "application/json", "X-Flat-Proxy-Token": proxyToken };
-    expect((await app.request("/api/finance", { headers }, bindings())).status).toBe(401);
-    const login = await app.request("/api/login", { method: "POST", headers,
-      body: JSON.stringify({ roommateId: roommateIds[1] }) }, bindings());
-    expect(login.status).toBe(200);
-    const session = await app.request("/api/session", { headers: { ...headers, Cookie: login.headers.get("set-cookie")!.split(";")[0] } }, bindings());
-    expect(await session.json()).toMatchObject({ authenticated: true, roommate: { id: roommateIds[1] } });
+  test("obsolete identity-selection endpoints cannot change attribution", async () => {
+    for (const path of ["/api/login", "/api/logout"]) {
+      expect((await send(path, {}, "POST", { roommateId: "stadlmann" })).status).toBe(410);
+    }
+    expect(await (await send()).json()).toMatchObject({ roommate: { id: "kran" } });
+  });
+  test("retains exact-origin CSRF checks for all unsafe verbs", async () => {
+    for (const untrusted of ["", "null", "https://evil.test", "http://flat.test/", "http://flat.test.evil.test", "http://flat.test, https://evil.test"]) {
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+        expect((await send("/api/finance/expenses", { Origin: untrusted, "X-Forwarded-Host": "flat.test" }, method, {})).status).toBe(403);
+      }
+    }
+    const response = await app.request("/api/finance/expenses", { method: "POST", headers: { ...identityHeaders, "X-Flat-Proxy-Token": proxyToken } }, bindings());
+    expect(response.status).toBe(403);
+  });
+  test("attributes expenses to verified actor while preserving selected payer and balances", async () => {
+    const response = await send("/api/finance/expenses", { Cookie: await loginCookie() }, "POST", {
+      description: "Isolated attribution test", amountCents: 1200, paidBy: "stadlmann", paidAt: "2026-09-20",
+      splitMode: "equal", participantIds: roommateIds, createdBy: "mitter",
+    });
+    expect(response.status).toBe(201);
+    const { transaction } = await response.json() as { transaction: { createdBy: string; paidBy: string } };
+    expect(transaction).toMatchObject({ createdBy: "kran", paidBy: "stadlmann" });
+    const finance = await (await send("/api/finance")).json() as { balances: { roommateId: string; balanceCents: number }[] };
+    expect(finance.balances).toContainEqual(expect.objectContaining({ roommateId: "stadlmann", balanceCents: 800 }));
+  });
+  test("configuration rejects ambiguous or invalid mappings without exposing them", () => {
+    expect(parseIdentityMappings(JSON.stringify([identity]))).toEqual([identity]);
+    for (const entries of [[], [identity, identity], [identity, { ...identity, email: "other@example.test" }],
+      [identity, { ...identity, uid: "other" }], [identity, { ...identity, email: "other@example.test", uid: "other" }],
+      [{ ...identity, roommateId: "unknown" }], [{ ...identity, email: "one@example.test,two@example.test" }]]) {
+      expect(() => parseIdentityMappings(JSON.stringify(entries))).toThrow("requires unique");
+    }
+    expect(() => parseIdentityMappings(undefined)).toThrow();
   });
 });

@@ -19,7 +19,7 @@ bun install
 cp .env.example .env
 ```
 
-Set a private 64-hex `FLAT_PROXY_TOKEN`, matching only the authenticated ingress, and retain the long random `SESSION_SECRET` for roommate attribution sessions. Every request except GET/HEAD health requires server-to-server proof. The browser selects a roommate after Authentik authentication; there is no app password. Never expose the proof token in frontend code, Git or responses. Preserve exact `FLAT_TRUSTED_ORIGINS` for CSRF.
+Set a private 64-hex `FLAT_PROXY_TOKEN`, matching only the authenticated ingress, and a private `FLAT_IDENTITY_MAP` (see [identity and onboarding](docs/authentik.md)). Every request except GET/HEAD health requires server-to-server proof plus an unambiguous Authentik email/UID mapping. There is no roommate picker or app identity cookie. Legacy `flat_session` cookies are ignored and expired; `SESSION_SECRET` is no longer used. Never expose the proof or private mapping in frontend code, Git or responses. Preserve exact `FLAT_TRUSTED_ORIGINS` for CSRF.
 
 Start the frontend and API in development mode:
 
@@ -71,5 +71,5 @@ Requests include the unchanged receipt prompt and strict JSON schema, with no to
 bun run typecheck
 bun run test
 bun run build
-bun run test:e2e
+bun run test:e2e # uses the preceding build; isolated temporary SQLite
 ```

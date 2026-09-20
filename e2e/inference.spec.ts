@@ -1,11 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { roommateIds } from "../src/shared/config";
 
 test("real private inference with synthetic receipt image", async ({ request }) => {
   test.skip(process.env.FLAT_TEST_REAL_INFERENCE !== "1", "Explicit isolated inference opt-in required");
   test.setTimeout(200_000);
-  const login = await request.post("/api/login", { data: { roommateId: roommateIds[0] } });
+  const login = await request.get("/api/session");
   expect(login.status()).toBe(200);
   const before = await request.get("/api/finance");
   const snapshot = await before.text();

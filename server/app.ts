@@ -1,7 +1,8 @@
+import { verifiedRoommate, type IdentityMapping } from "./identity";
 import { hasProxyProof, isHealthRequest } from "./proxy";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
-import { deleteCookie, setCookie } from "hono/cookie";
+import { deleteCookie } from "hono/cookie";
 import { z } from "zod";
 import { analyzeReceipt } from "./inference";
 import type { LocalDatabase } from "./db";
@@ -35,7 +36,7 @@ import { receiptTrackingCategories, weekdays } from "../src/shared/types";
 type Env = {
   DB: LocalDatabase;
   PROXY_TOKEN: string;
-  SESSION_SECRET: string;
+  IDENTITY_MAP: readonly IdentityMapping[];
   TRUSTED_ORIGINS: readonly string[];
   analyzeReceipt: typeof analyzeReceipt;
 };
@@ -139,10 +140,6 @@ const sessionCookieName = "flat_session";
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const roommateIdSchema = z.string().refine((value) => roommateIds.includes(value), {
   message: "Unbekannte Person.",
-});
-
-const loginSchema = z.object({
-  roommateId: roommateIdSchema,
 });
 
 const splitSchema = z.object({
@@ -291,12 +288,6 @@ app.use("*", async (c, next) => {
   await next();
 });
 
-// One constant-size budget for the entire process, independent of proxy/IP headers.
-const loginWindowMs = 15 * 60 * 1000;
-const loginAttemptLimit = 30;
-let loginWindowStartedAt = 0;
-let loginAttempts = 0;
-
 app.use("/api/*", async (c, next) => {
   if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
     const origin = c.req.header("Origin");
@@ -307,80 +298,26 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
-app.use("/api/login", async (c, next) => {
-  if (c.req.method === "POST") {
-    const now = Date.now();
-    if (now - loginWindowStartedAt >= loginWindowMs) {
-      loginWindowStartedAt = now;
-      loginAttempts = 0;
-    }
-    if (loginAttempts >= loginAttemptLimit) {
-      c.header("Retry-After", String(Math.max(1, Math.ceil((loginWindowStartedAt + loginWindowMs - now) / 1000))));
-      return c.json({ error: "Zu viele Anmeldeversuche. Bitte spater erneut versuchen." }, 429);
-    }
-    loginAttempts++;
-  }
-  await next();
-});
-
 app.get("/healthz", (c) => c.json({ ok: true }));
 
-app.get("/api/session", async (c) => {
-  const roommate = await readSession(c.req.raw, c.env.SESSION_SECRET);
-  return c.json({
-    authenticated: Boolean(roommate),
-    roommate,
-    roommates,
-    household,
-  });
-});
-
-app.post("/api/login", zValidator("json", loginSchema), async (c) => {
-  const input = c.req.valid("json");
-
-  const roommate = findRoommate(input.roommateId);
-  if (!roommate) {
-    return c.json({ error: "Unbekannte Person." }, 400);
-  }
-
-  const maxAgeSeconds = 60 * 60 * 24 * 30;
-  const expiresAt = Date.now() + maxAgeSeconds * 1000;
-  const value = await createSessionValue(roommate.id, expiresAt, c.env.SESSION_SECRET);
-
-  setCookie(c, sessionCookieName, value, {
-    httpOnly: true,
-    sameSite: "Lax",
-    secure: c.req.header("Origin")!.startsWith("https://"),
-    path: "/",
-    maxAge: maxAgeSeconds,
-  });
-
-  return c.json({
-    authenticated: true,
-    roommate,
-    roommates,
-    household,
-  });
-});
-
-app.post("/api/logout", (c) => {
-  deleteCookie(c, sessionCookieName, {
-    path: "/",
-    httpOnly: true,
-    sameSite: "Lax",
-    secure: c.req.header("Origin")!.startsWith("https://"),
-  });
-  return c.json({ ok: true });
-});
-
 app.use("/api/*", async (c, next) => {
-  const roommate = await readSession(c.req.raw, c.env.SESSION_SECRET);
-  if (!roommate) {
-    return c.json({ error: "Nicht angemeldet." }, 401);
+  c.header("Cache-Control", "no-store");
+  if (c.req.header("Cookie")?.split(";").some((part) => part.trim().startsWith(`${sessionCookieName}=`))) {
+    deleteCookie(c, sessionCookieName, { path: "/", httpOnly: true, sameSite: "Lax", secure: true });
   }
+  const roommate = verifiedRoommate(c.req.raw, c.env.PROXY_TOKEN, c.env.IDENTITY_MAP);
+  if (!roommate) return c.json({ error: "Keine eindeutige WG-Zuordnung. Bitte den Administrator kontaktieren." }, 403);
   c.set("roommate", roommate);
   await next();
 });
+
+app.get("/api/session", (c) => c.json({
+  authenticated: true, roommate: c.get("roommate"), roommates, household,
+}));
+
+// Old clients cannot select or persist a different identity.
+app.post("/api/login", (c) => c.json({ error: "Personenauswahl wurde entfernt." }, 410));
+app.post("/api/logout", (c) => c.json({ error: "Bitte über Authentik abmelden." }, 410));
 
 app.get("/api/finance", async (c) => {
   const transactions = await listFinanceTransactions(c.env.DB);
@@ -1407,82 +1344,6 @@ function parseModelJson(value: unknown): unknown {
 
 function stringFormValue(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-async function readSession(request: Request, secret: string): Promise<Roommate | null> {
-  const cookieHeader = request.headers.get("Cookie");
-  const value = readCookie(cookieHeader, sessionCookieName);
-  if (!value) {
-    return null;
-  }
-
-  const parts = value.split(".");
-  if (parts.length !== 3) {
-    return null;
-  }
-
-  const [roommateId, expiresAtRaw, signature] = parts;
-  const expiresAt = Number(expiresAtRaw);
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-    return null;
-  }
-
-  const expected = await signSession(`${roommateId}.${expiresAtRaw}`, secret);
-  if (!constantTimeEqual(signature, expected)) {
-    return null;
-  }
-
-  return findRoommate(roommateId) ?? null;
-}
-
-async function createSessionValue(roommateId: string, expiresAt: number, secret: string): Promise<string> {
-  const payload = `${roommateId}.${expiresAt}`;
-  return `${payload}.${await signSession(payload, secret)}`;
-}
-
-async function signSession(payload: string, secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-  return toBase64Url(signature);
-}
-
-function toBase64Url(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return mismatch === 0;
-}
-
-function readCookie(cookieHeader: string | null, name: string): string | undefined {
-  if (!cookieHeader) {
-    return undefined;
-  }
-  const prefix = `${name}=`;
-  return cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(prefix))
-    ?.slice(prefix.length);
 }
 
 class HTTPError extends Error {

@@ -1,3 +1,4 @@
+import { parseIdentityMappings, type IdentityMapping } from "./identity";
 import { resolve } from "node:path";
 
 export type LocalConfig = {
@@ -5,15 +6,14 @@ export type LocalConfig = {
   host: string;
   proxyToken: string;
   port: number;
-  sessionSecret: string;
+  identityMappings: IdentityMapping[];
   trustedOrigins: string[];
 };
 
 export function readConfig(): LocalConfig {
   const proxyToken = process.env.FLAT_PROXY_TOKEN?.trim();
-  const sessionSecret = process.env.SESSION_SECRET?.trim();
-  if (!proxyToken || !/^[a-f0-9]{64}$/.test(proxyToken) || !sessionSecret) {
-    throw new Error("FLAT_PROXY_TOKEN (64 hex) und SESSION_SECRET mussen in .env gesetzt sein.");
+  if (!proxyToken || !/^[a-f0-9]{64}$/.test(proxyToken)) {
+    throw new Error("FLAT_PROXY_TOKEN (64 hex) mussen in .env gesetzt sein.");
   }
 
   const port = Number(process.env.PORT ?? "8787");
@@ -26,7 +26,7 @@ export function readConfig(): LocalConfig {
     host: process.env.HOST?.trim() || "127.0.0.1",
     proxyToken,
     port,
-    sessionSecret,
+    identityMappings: parseIdentityMappings(process.env.FLAT_IDENTITY_MAP),
     trustedOrigins: parseTrustedOrigins(process.env.FLAT_TRUSTED_ORIGINS),
   };
 }

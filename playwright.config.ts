@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,18 +16,18 @@ export default defineConfig({
   },
   use: {
     baseURL: e2eBaseUrl,
-    extraHTTPHeaders: { Origin: e2eBaseUrl, "X-Flat-Proxy-Token": "a".repeat(64) },
+    extraHTTPHeaders: { Origin: e2eBaseUrl, "X-Flat-Proxy-Token": "a".repeat(64), "X-Flat-Email": "owner@example.test", "X-Flat-Uid": "fixture-owner" },
     launchOptions: {
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ?? "/snap/bin/chromium",
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ?? (existsSync("/snap/bin/chromium") ? "/snap/bin/chromium" : undefined),
     },
     trace: "on-first-retry",
   },
   webServer: {
-    command: "bun run build && bun server/index.ts",
+    command: "bun server/index.ts",
     env: {
       FLAT_TRUSTED_ORIGINS: e2eBaseUrl,
       FLAT_PROXY_TOKEN: "a".repeat(64),
-      SESSION_SECRET: "dev-secret-change-before-deploy",
+      FLAT_IDENTITY_MAP: JSON.stringify([{ email: "owner@example.test", uid: "fixture-owner", roommateId: "kran" }]),
       FLAT_DATABASE_PATH: e2eDatabasePath,
       PORT: String(e2ePort),
     },

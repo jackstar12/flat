@@ -6,9 +6,9 @@ const roommateNames = roommates.map((roommate) => roommate.name);
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("Person").selectOption(firstRoommate.id);
+  await expect(page.getByLabel("Person", { exact: true })).toHaveCount(0);
   await expect(page.locator("input[type=password]")).toHaveCount(0);
-  await page.getByRole("button", { name: "Weiter" }).click();
+  await expect(page.getByText("Person wählen", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Finanzen" })).toBeVisible();
 });
 
@@ -193,4 +193,26 @@ test("creates, edits, completes, and deletes a rotation", async ({ page }, testI
 
   await card.getByTitle(`${updatedName} löschen`).click();
   await expect(card).toHaveCount(0);
+});
+
+
+test("expired expense authentication offers top-level login without replay", async ({ page }) => {
+  let posts = 0;
+  await page.route("**/api/finance/expenses", async (route) => {
+    if (route.request().method() === "POST") {
+      posts++;
+      await route.fulfill({ status: 401, contentType: "application/json", body: '{"error":"Authentication required"}' });
+    } else await route.continue();
+  });
+  await page.getByRole("button", { name: "Ausgabe", exact: true }).click();
+  await page.getByLabel("Beschreibung").fill("Unsaved expired request");
+  await page.getByLabel("Betrag", { exact: true }).fill("12,00");
+  await page.getByRole("button", { name: "Speichern", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("nicht automatisch wiederholt");
+  await expect(page.getByRole("link", { name: "Erneut anmelden" })).toHaveAttribute("href", "/");
+  await expect(page.getByLabel("Beschreibung")).toHaveValue("Unsaved expired request");
+  expect(posts).toBe(1);
+  await page.getByRole("link", { name: "Erneut anmelden" }).click();
+  await expect(page.getByRole("heading", { name: "Finanzen", exact: true })).toBeVisible();
+  expect(posts).toBe(1);
 });
