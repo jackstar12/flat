@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f7f8f4"/>
+  <rect x="48" y="48" width="416" height="416" rx="104" fill="#2f5d50"/>
+  <!-- The house and HW monogram fit inside the maskable 40% safe radius. -->
+  <g fill="none" stroke="#f7f8f4" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M154 224 256 146 358 224M170 220V350H342V220"/>
+    <path d="M201 252V316M239 252V316M201 284H239"/>
+    <path d="M265 252 277 316 293 279 309 316 321 252"/>
+  </g>
+</svg>

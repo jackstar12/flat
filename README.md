@@ -2,6 +2,9 @@
 
 Local web app for shared-flat finances and chores. It runs as one Bun service behind authenticated ingress.
 
+The app is branded **Hugo Wolfgang** and supports native browser installation.
+See [installation, online/auth requirements and PWA verification](docs/pwa.md).
+
 ## Local architecture
 
 - React/Vite frontend, built into `dist/`

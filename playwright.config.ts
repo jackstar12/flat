@@ -23,7 +23,7 @@ export default defineConfig({
     },
     trace: "on-first-retry",
   },
-  webServer: {
+  webServer: [{
     command: "bun server/index.ts",
     env: {
       FLAT_TRUSTED_ORIGINS: e2eBaseUrl,
@@ -40,7 +40,17 @@ export default defineConfig({
     url: `${e2eBaseUrl}/healthz`,
     reuseExistingServer: false,
     timeout: 60_000,
-  },
+  }, {
+    command: "bun e2e/pwa-gateway.ts",
+    env: {
+      FLAT_E2E_GATEWAY: "synthetic-only",
+      E2E_BACKEND_URL: e2eBaseUrl,
+      E2E_PWA_PORT: String(process.env.E2E_PWA_PORT ?? e2ePort + 1),
+    },
+    url: `http://127.0.0.1:${process.env.E2E_PWA_PORT ?? e2ePort + 1}/__test/health`,
+    reuseExistingServer: false,
+    timeout: 30_000,
+  }],
   projects: [
     {
       name: "chromium",

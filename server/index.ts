@@ -46,8 +46,15 @@ const server = Bun.serve({
     if (withinDist && !decodedPath.endsWith("/")) {
       const asset = Bun.file(requestedPath);
       if (await asset.exists()) {
+        // Install metadata stays authenticated and must be re-fetched after login
+        // or deployment. Explicit MIME also covers HEAD responses (no body).
+        const installAsset = decodedPath === "/sw.js" || decodedPath === "/manifest.webmanifest";
         return new Response(request.method === "HEAD" ? null : asset, {
-          headers: { "Cache-Control": decodedPath.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache" },
+          headers: {
+            "Cache-Control": installAsset ? "private, no-store" : decodedPath.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+            "Content-Type": decodedPath === "/sw.js" ? "text/javascript; charset=utf-8" : decodedPath === "/manifest.webmanifest" ? "application/manifest+json" : asset.type,
+            ...(installAsset ? { "X-Content-Type-Options": "nosniff" } : {}),
+          },
         });
       }
     }
