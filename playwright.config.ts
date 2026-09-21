@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { roommates } from "./src/shared/config";
 
 const e2eDatabasePath = join(tmpdir(), `flat-e2e-${process.pid}-${Date.now()}.sqlite`);
 const e2ePort = Number(process.env.E2E_PORT ?? 4387);
@@ -27,7 +28,12 @@ export default defineConfig({
     env: {
       FLAT_TRUSTED_ORIGINS: e2eBaseUrl,
       FLAT_PROXY_TOKEN: "a".repeat(64),
-      FLAT_IDENTITY_MAP: JSON.stringify([{ email: "owner@example.test", uid: "fixture-owner", roommateId: "kran" }]),
+      FLAT_IDENTITY_MAP: JSON.stringify([
+        { email: "owner@example.test", uid: "fixture-owner", roommateId: "kran" },
+        ...roommates.slice(1).map((roommate) => ({
+          email: `ui-${roommate.id}@example.test`, uid: `ui-${roommate.id}`, roommateId: roommate.id,
+        })),
+      ]),
       FLAT_DATABASE_PATH: e2eDatabasePath,
       PORT: String(e2ePort),
     },

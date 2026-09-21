@@ -23,6 +23,7 @@ import {
 import { FormEvent, ReactNode, useEffect, useState } from "react";
 import { roommates, roommateIds, findRoommate, household } from "./shared/config";
 import { aggregateReceiptSplits } from "./shared/receipt";
+import { resolveExpensePayer } from "./shared/expense-payer";
 import { currentAssigneeId, dateStatus, defaultChoreWeekday } from "./shared/tasks";
 import type {
   Chore,
@@ -45,7 +46,7 @@ type View = "finanzen" | "aufgaben";
 type ExpenseForm = {
   description: string;
   amount: string;
-  paidBy: string;
+  paidBy: string | null;
   paidAt: string;
   splitMode: "equal" | "custom";
   participantIds: string[];
@@ -76,7 +77,7 @@ type RotationForm = {
 
 type ReceiptImportForm = {
   description: string;
-  paidBy: string;
+  paidBy: string | null;
   paidAt: string;
   receiptText: string;
 };
@@ -86,7 +87,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const defaultExpenseForm = (): ExpenseForm => ({
   description: "",
   amount: "",
-  paidBy: roommates[0].id,
+  paidBy: null,
   paidAt: today(),
   splitMode: "equal",
   participantIds: roommateIds,
@@ -111,7 +112,7 @@ const defaultChoreForm = (): ChoreForm => ({
 
 const defaultReceiptImportForm = (): ReceiptImportForm => ({
   description: "Spar Rechnung",
-  paidBy: roommates[0].id,
+  paidBy: null,
   paidAt: today(),
   receiptText: "",
 });
@@ -190,7 +191,7 @@ export default function App() {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm font-medium text-moss">{household.name}</p>
-            <h1 className="text-2xl font-semibold tracking-normal">WG Cockpit</h1>
+            <h1 className="text-2xl font-semibold tracking-normal">Hugo Wolfgang</h1>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <nav className="grid grid-cols-2 rounded-md border border-line bg-cloud p-1">
@@ -230,6 +231,7 @@ export default function App() {
         {activeView === "finanzen" ? (
           <FinanceView
             data={finance}
+            authenticatedRoommateId={session.roommate?.id}
             onChanged={() => void loadFinance().catch((unknownError) => setError(readError(unknownError)))}
             onError={setError}
           />
@@ -247,10 +249,12 @@ export default function App() {
 
 function FinanceView({
   data,
+  authenticatedRoommateId,
   onChanged,
   onError,
 }: {
   data: FinancePayload | null;
+  authenticatedRoommateId?: string;
   onChanged: () => void;
   onError: (message: string) => void;
 }) {
@@ -438,6 +442,7 @@ function FinanceView({
       {expenseOpen ? (
         <ExpensePanel
           transaction={editingExpense}
+          authenticatedRoommateId={authenticatedRoommateId}
           onClose={() => setExpenseOpen(false)}
           onSaved={() => {
             setExpenseOpen(false);
@@ -450,6 +455,7 @@ function FinanceView({
 
       {receiptOpen ? (
         <ReceiptImportPanel
+          authenticatedRoommateId={authenticatedRoommateId}
           onClose={() => setReceiptOpen(false)}
           onSaved={() => {
             setReceiptOpen(false);
@@ -463,15 +469,18 @@ function FinanceView({
 }
 
 function ReceiptImportPanel({
+  authenticatedRoommateId,
   onClose,
   onSaved,
   onError,
 }: {
+  authenticatedRoommateId?: string;
   onClose: () => void;
   onSaved: () => void;
   onError: (message: string) => void;
 }) {
   const [form, setForm] = useState<ReceiptImportForm>(() => defaultReceiptImportForm());
+  const paidBy = resolveExpensePayer(form.paidBy, authenticatedRoommateId);
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<ReceiptAnalysis | null>(null);
   const [pending, setPending] = useState(false);
@@ -531,7 +540,7 @@ function ReceiptImportPanel({
       return;
     }
     try {
-      await createExpenseFromReceipt(form, analysis, file);
+      await createExpenseFromReceipt({ ...form, paidBy }, analysis, file);
       onSaved();
     } catch (unknownError) {
       onError(readError(unknownError));
@@ -583,7 +592,7 @@ function ReceiptImportPanel({
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
               <RoommateSelect
                 label="Bezahlt von"
-                value={form.paidBy}
+                value={paidBy}
                 onChange={(value) => setForm((current) => ({ ...current, paidBy: value }))}
               />
               <DateInput
@@ -689,7 +698,7 @@ function ReceiptImportPanel({
                 <button
                   className="primary-button w-full"
                   type="button"
-                  disabled={!receiptAnalysisIsValid(analysis)}
+                  disabled={!paidBy || !receiptAnalysisIsValid(analysis)}
                   onClick={() => void saveExpense()}
                 >
                   Als Ausgabe speichern
@@ -899,11 +908,13 @@ function newReceiptAssignmentRule(): ReceiptAssignmentRule {
 
 function ExpensePanel({
   transaction,
+  authenticatedRoommateId,
   onClose,
   onSaved,
   onError,
 }: {
   transaction: FinanceTransaction | null;
+  authenticatedRoommateId?: string;
   onClose: () => void;
   onSaved: () => void;
   onError: (message: string) => void;
@@ -911,11 +922,12 @@ function ExpensePanel({
   const [form, setForm] = useState<ExpenseForm>(() =>
     transaction ? expenseFormFromTransaction(transaction) : defaultExpenseForm(),
   );
+  const paidBy = resolveExpensePayer(form.paidBy, authenticatedRoommateId);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
-      await submitExpense(form, transaction?.id);
+      await submitExpense({ ...form, paidBy }, transaction?.id);
       onSaved();
     } catch (unknownError) {
       onError(readError(unknownError));
@@ -951,7 +963,7 @@ function ExpensePanel({
           </div>
           <RoommateSelect
             label="Bezahlt von"
-            value={form.paidBy}
+            value={paidBy}
             onChange={(value) => setForm((current) => ({ ...current, paidBy: value }))}
           />
           <div>
@@ -1795,6 +1807,7 @@ function RoommateSelect({
     <label className="block">
       <span className="label">{label}</span>
       <select className="input" value={value} onChange={(event) => onChange(event.target.value)}>
+        {!value ? <option value="" disabled>Bitte auswählen</option> : null}
         {roommates.map((roommate) => (
           <option key={roommate.id} value={roommate.id}>
             {roommate.name}
@@ -1941,6 +1954,9 @@ async function apiForm<T = unknown>(path: string, body: FormData, method = "POST
 }
 
 async function submitExpense(form: ExpenseForm, id?: string): Promise<void> {
+  if (!form.paidBy) {
+    throw new Error("Bitte eine zahlende Person auswählen.");
+  }
   const amountCents = centsFromEuroInput(form.amount);
   if (!Number.isInteger(amountCents) || amountCents <= 0) {
     throw new Error("Bitte einen gultigen Betrag eingeben.");
@@ -1975,6 +1991,9 @@ async function createExpenseFromReceipt(
   analysis: ReceiptAnalysis,
   originalFile: File | null,
 ): Promise<void> {
+  if (!form.paidBy) {
+    throw new Error("Bitte eine zahlende Person auswählen.");
+  }
   if (analysis.totalCents <= 0 || analysis.roommateTotals.length === 0) {
     throw new Error("Die Analyse enthalt keine speicherbare Aufteilung.");
   }
@@ -2090,7 +2109,7 @@ function expenseFormFromTransaction(transaction: FinanceTransaction): ExpenseFor
   return {
     description: transaction.description,
     amount: euroInputFromCents(transaction.amountCents),
-    paidBy: transaction.paidBy ?? roommates[0].id,
+    paidBy: transaction.paidBy ?? "",
     paidAt: transaction.paidAt,
     splitMode: "custom",
     participantIds: transaction.splits.map((split) => split.roommateId),
