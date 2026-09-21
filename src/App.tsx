@@ -190,7 +190,6 @@ export default function App() {
       <header className="border-b border-line bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-sm font-medium text-moss">{household.name}</p>
             <h1 className="text-2xl font-semibold tracking-normal">Hugo Wolfgang</h1>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
