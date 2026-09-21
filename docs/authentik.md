@@ -21,13 +21,24 @@ The explicitly authorized 2026-09-21 onboarding is live:
 | Stadlmann | `stadlmair.j1kob@gmail.com` | 56 / `116fbdde-fc2c-4ecc-914a-aa46517daa23` | `stadlmann` |
 | Mitter | `moritzmitter7@gmail.com` | 57 / `415ef168-600f-4137-8fb0-2e13deb5edba` | `mitter` |
 
-The two new accounts are active ordinary users with no password, administrator,
-group or role grants. Their confirmed EmailDevices (18 and 19 respectively) use
-those exact email destinations and the existing native email-code stage. The native
-flow still requires an actual code and matching device proof; pre-enrollment does
-not establish mailbox ownership or a login session. Native `check_access` permits
-Flat and denies Sitzplan, Wizard, Freundebuch, Jungschar, Immich and Pages CMS.
-Viktoria's separate Sitzplan-only grant and Jakob's administrator recovery remain.
+Flat gateway authorization now uses the native Authentik **WG** group
+(`e4d852dd-e25c-4ea0-9663-dacbe3e97a08`) with a separate active-user policy, both
+required in `all` mode. Jakob, Stadlmann and Mitter are current members. The two
+ordinary accounts have WG membership and no administrator or role grants.
+Membership grants gateway access; it does not create a backend roommate mapping.
+
+The repaired shared email branch uses the pinned safe WG enrollment scope instead
+of an exact per-person list. Ordinary users must have only WG as their direct group,
+no roles or unsafe inherited privileges, a unique email, and one matching confirmed
+native EmailDevice at the existing email-code stage. Devices 18 and 19 are retained.
+No self-registration or enrollment flow was added. Native OTP/device proof is still
+required; eligibility and configured confirmation do not prove a human sign-in.
+
+Other app gates were preserved from the fresh repair baseline. WG currently also
+passes Freundebuch due to a separate manual binding; Stadlmann and Mitter fail
+Sitzplan, Wizard, Jungschar, Immich and Pages CMS. Viktoria's original Sitzplan/email
+policy code remains untouched; her separate group assignment currently makes those
+policies deny her. Jakob's administrator and independent recovery remain intact.
 
 All three verified email/UID mappings are stored only in
 `/srv/app-data/flat/flat.env` (0600), using authoritative Authentik `User.uid`, not
@@ -42,7 +53,9 @@ their original financial meaning and may reference any existing roommate.
 
 1. In Authentik, configure the intended existing person's actual email and complete
    the native verified email-code setup. Adding an email alone does not grant Flat
-   access: its native policy and email flow must explicitly permit that exact user.
+   access: an administrator must enroll its native device and grant WG membership.
+   The safe WG email scope and native OTP proof must both pass; no public self-enrollment
+   is enabled.
    Follow infra's `docs/authentik.md`: privileged gateway changes require an explicitly
    created expiring admin API token; no standing-token discovery or database writes.
 2. Read that existing user's Authentik `uid` (the value emitted in `X-Authentik-Uid`,
@@ -61,7 +74,8 @@ their original financial meaning and may reference any existing roommate.
    unique email/UID per roommate. Keep the env file mode 0600. Do not commit it.
 4. Restart only `systemctl --user restart flat-web.service` on dev. Have the person
    sign in normally at the public URL and confirm the displayed roommate. No picker
-   should appear. Mapping alone cannot bypass Authentik's native app allowlist.
+   should appear. Mapping alone cannot bypass Authentik's native WG and active-user bindings.
+   Conversely, a WG member without a configured email+UID mapping is denied by Flat.
 
 ## Expiry and acceptance
 
@@ -77,12 +91,12 @@ acceptance requires the user to sign in with their own email code, confirm their
 without selection (Stadlmann and Mitter must see their own respective roommates), inspect existing balances, and test expiry on a draft without
 saving a synthetic production expense. Never extract OTPs or forge a live session.
 
-Infra's canonical verifier pins the two exact grants and additive shared email
-policies while preserving the immutable Sitzplan receipt, native proof, resend
-throttle, flow IDs, application bindings and outpost state. It also checks hidden
-applications through the full admin listing. Detailed identity/device IDs, access
-matrix, preserved-state checks and test results are saved in
-`/home/jacksn/.hermes/cache/flat-onboarding-result.json`. Each person's real OTP
-sign-in and displayed-roommate acceptance remain manual; no code was retrieved and
-no live session was forged. The preexisting temporary admin API token remains with
-its coordinator owner for revocation.
+Infra's scoped verifier is `sudo python3 scripts/authentik-app-policy --flat-only`
+on agency. It verifies the native WG and active-user bindings, safe enrollment scope,
+unchanged native proof/throttle and complete current application matrix. It preserves
+historical identity/device receipts as audit evidence rather than app allowlists.
+Repair evidence is `/home/jacksn/.hermes/cache/flat-wg-repair/result.json` on dev.
+The repair changes no Flat environment bytes, mappings, service state, database,
+financial IDs or UI. Each person's real OTP sign-in and displayed-roommate acceptance
+remain manual; no code was requested/retrieved and no live session was forged.
+The task token remains active for Hermes's independent verification and revocation.

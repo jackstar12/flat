@@ -159,6 +159,13 @@ describe("verified proxy identity", () => {
     ] as Record<string, string>[]) expect((await send("/api/session", extra)).status).toBe(403);
     expect((await send("/api/session", {}, "GET", undefined, [identity, identity])).status).toBe(403);
   });
+  test("denies an unmapped gateway identity even when it belongs to WG", async () => {
+    const response = await send("/api/session", {
+      "X-Flat-Email": "unmapped@example.test", "X-Flat-Uid": "unmapped-native-uid",
+      "X-Authentik-Groups": "WG",
+    });
+    expect(response.status).toBe(403);
+  });
   test("identity spoofing cannot replace private proof", async () => {
     for (const token of ["", "b".repeat(64), `${proxyToken}, ${proxyToken}`]) {
       expect((await send("/api/finance", { "X-Flat-Proxy-Token": token, Cookie: await loginCookie() })).status).toBe(401);
