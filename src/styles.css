@@ -56,3 +56,60 @@
     @apply grid grid-cols-2 rounded-md border border-line bg-cloud p-1;
   }
 }
+
+/* The receipt sheet owns scrolling; its actions stay within thumb reach. */
+.receipt-overlay {
+  @apply fixed inset-0 z-20 flex justify-center bg-ink/40;
+}
+.receipt-dialog {
+  @apply flex w-full min-w-0 flex-col bg-white text-ink shadow-soft outline-none;
+  height: 100dvh;
+  max-height: none;
+  max-width: none;
+  margin: auto;
+  padding: 0;
+  border: 0;
+}
+.receipt-header {
+  @apply shrink-0 border-b border-line px-4 pb-3;
+  padding-top: max(1rem, env(safe-area-inset-top));
+}
+.receipt-step {
+  @apply rounded-md bg-cloud px-2 py-2 text-sm font-semibold text-ink/60 disabled:opacity-50;
+}
+.receipt-step-active {
+  @apply bg-moss text-white;
+}
+.receipt-scroll {
+  @apply min-h-0 flex-1 overflow-y-auto overscroll-contain p-4;
+  scroll-padding-top: 1rem;
+}
+.receipt-footer {
+  @apply shrink-0 border-t border-line bg-white px-4 pt-3;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+.receipt-dialog :is(button, summary, input:not([type="file"]), select) {
+  min-height: 44px;
+}
+.receipt-dialog .icon-button { min-width: 44px; }
+.receipt-dialog :is(input, select, textarea) { min-width: 0; font-size: 16px; }
+.receipt-dialog :is(button, summary):focus-visible { outline: 2px solid #2f5d50; outline-offset: 2px; }
+.receipt-disclosure { @apply rounded-md border border-line; }
+.receipt-disclosure summary { @apply cursor-pointer px-3 py-3 text-sm font-semibold; }
+.receipt-disclosure .overflow-y-auto { max-height: none; overflow: visible; }
+@media (min-width: 640px) {
+  .receipt-overlay { @apply items-center p-6; }
+  .receipt-dialog { @apply max-w-2xl rounded-xl border border-line; height: min(900px, calc(100dvh - 3rem)); }
+  .receipt-header, .receipt-scroll, .receipt-footer { padding-left: 1.5rem; padding-right: 1.5rem; }
+  .receipt-footer { @apply rounded-b-xl; }
+}
+
+.receipt-header, .receipt-scroll, .receipt-footer {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+.receipt-dialog::backdrop { background: rgb(26 38 33 / 40%); }
+@media (min-width: 640px) {
+  .receipt-dialog { width: calc(100% - 3rem); }
+  .receipt-header, .receipt-scroll, .receipt-footer { padding-left: 1.5rem; padding-right: 1.5rem; }
+}

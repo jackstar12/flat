@@ -123,6 +123,7 @@ test("receipt creation defaults, preserves override during analysis, and resets 
   await page.getByRole("button", { name: "Rechnung analysieren", exact: true }).click();
   await expect(page.getByLabel("Bezahlt von")).toHaveValue(actor.id);
   await page.getByLabel("Beschreibung", { exact: true }).fill(`Synthetic receipt default ${testInfo.project.name}`);
+  await page.locator("summary").filter({ hasText: "Rechnungstext" }).click();
   await page.getByLabel("Rechnungstext").fill("Synthetic item 3.00");
   await page.getByRole("button", { name: "Analysieren", exact: true }).click();
   const savedDefault = await saveExpense(page, "Als Ausgabe speichern");
@@ -135,8 +136,9 @@ test("receipt creation defaults, preserves override during analysis, and resets 
   await expect(page.getByLabel("Rechnungstext")).toHaveValue("");
   await expect(page.getByRole("button", { name: "Als Ausgabe speichern" })).toHaveCount(0);
   await page.getByLabel("Beschreibung", { exact: true }).fill(`Synthetic receipt override ${testInfo.project.name}`);
+  await page.locator("summary").filter({ hasText: "Rechnungstext" }).click();
   await page.getByLabel("Rechnungstext").fill("Synthetic item 3.00");
-  await page.locator('input[type="file"]').setInputFiles("e2e/fixtures/synthetic-receipt.png");
+  await page.getByLabel("Rechnung (Bild oder PDF)").setInputFiles("e2e/fixtures/synthetic-receipt.png");
   gate = new Promise<void>((resolve) => { release = resolve; });
   await page.getByRole("button", { name: "Analysieren", exact: true }).click();
   try {

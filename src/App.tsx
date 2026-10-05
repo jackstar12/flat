@@ -1,6 +1,7 @@
 import {
   Banknote,
   CalendarDays,
+  Camera,
   CheckCircle2,
   ChevronDown,
   ClipboardList,
@@ -20,7 +21,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { roommates, roommateIds, findRoommate, household } from "./shared/config";
 import { aggregateReceiptSplits } from "./shared/receipt";
 import { resolveExpensePayer } from "./shared/expense-payer";
@@ -483,6 +484,64 @@ function ReceiptImportPanel({
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<ReceiptAnalysis | null>(null);
   const [pending, setPending] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [authExpired, setAuthExpired] = useState(false);
+  const [step, setStep] = useState<"upload" | "review">("upload");
+  const busy = useRef(false);
+  const rulesBusy = useRef(false);
+  const sourceVersion = useRef(0);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const results = useRef<HTMLHeadingElement>(null);
+  const cameraInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const scrollSurface = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const expired = () => setAuthExpired(true);
+    window.addEventListener("flat-auth-expired", expired);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const modal = dialog.current;
+    modal?.showModal();
+    modal?.focus();
+    return () => {
+      window.removeEventListener("flat-auth-expired", expired);
+      document.body.style.overflow = overflow;
+      modal?.close();
+      previous?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (step === "review") {
+      results.current?.focus({ preventScroll: true });
+      results.current?.scrollIntoView({ block: "start" });
+    } else {
+      scrollSurface.current?.scrollTo({ top: 0 });
+    }
+  }, [step]);
+
+  useEffect(() => {
+    if (error) scrollSurface.current?.scrollTo({ top: 0 });
+  }, [error]);
+
+  function invalidateSource() {
+    sourceVersion.current += 1;
+    setAnalysis(null);
+    setError("");
+  }
+
+  function selectFile(next: File | null) {
+    if (!next) return;
+    invalidateSource();
+    setFile(next);
+  }
+
+  function reportError(unknownError: unknown) {
+    setError(readError(unknownError));
+  }
   const [rules, setRules] = useState<ReceiptAssignmentRule[]>([]);
   const [rulesLoading, setRulesLoading] = useState(true);
   const [rulesSaving, setRulesSaving] = useState(false);
@@ -491,11 +550,13 @@ function ReceiptImportPanel({
   useEffect(() => {
     void api<{ rules: ReceiptAssignmentRule[] }>("/api/receipt-rules")
       .then((payload) => setRules(payload.rules))
-      .catch((unknownError) => onError(readError(unknownError)))
+      .catch(reportError)
       .finally(() => setRulesLoading(false));
   }, [onError]);
 
   async function saveRules(): Promise<void> {
+    if (rulesBusy.current) return;
+    rulesBusy.current = true;
     setRulesSaving(true);
     try {
       const payload = await api<{ rules: ReceiptAssignmentRule[] }>("/api/receipt-rules", {
@@ -505,12 +566,17 @@ function ReceiptImportPanel({
       setRules(payload.rules);
       setRulesDirty(false);
     } finally {
+      rulesBusy.current = false;
       setRulesSaving(false);
     }
   }
 
   async function analyze(event: FormEvent) {
     event.preventDefault();
+    if (busy.current || rulesBusy.current || (!file && !form.receiptText.trim())) return;
+    busy.current = true;
+    const version = sourceVersion.current;
+    setError("");
     setPending(true);
     try {
       if (rulesDirty) {
@@ -522,73 +588,121 @@ function ReceiptImportPanel({
         formData.set("receipt", file);
       }
       const response = await apiForm<{ analysis: ReceiptAnalysis }>("/api/finance/receipt/analyze", formData);
-      setAnalysis(response.analysis);
+      if (sourceVersion.current === version) {
+        setAnalysis(response.analysis);
+        setStep("review");
+      }
     } catch (unknownError) {
-      onError(readError(unknownError));
+      reportError(unknownError);
     } finally {
+      busy.current = false;
       setPending(false);
     }
   }
 
   async function saveExpense() {
-    if (!analysis) {
+    if (!analysis || busy.current || rulesBusy.current) {
       return;
     }
     if (!receiptAnalysisIsValid(analysis)) {
-      onError("Bitte die Aufteilung jeder Position passend zur Positionssumme korrigieren.");
+      setError("Bitte die Aufteilung jeder Position passend zur Positionssumme korrigieren.");
       return;
     }
+    busy.current = true;
+    setSaving(true);
+    setError("");
     try {
       await createExpenseFromReceipt({ ...form, paidBy }, analysis, file);
       onSaved();
     } catch (unknownError) {
-      onError(readError(unknownError));
+      reportError(unknownError);
+    } finally {
+      busy.current = false;
+      setSaving(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-20 grid bg-ink/40 p-3 sm:place-items-center">
-      <section className="max-h-[calc(100vh-1.5rem)] w-full overflow-y-auto rounded-md border border-line bg-white p-4 shadow-soft sm:max-w-4xl sm:p-5">
-        <FormHeader title="Rechnung analysieren" onClose={onClose} />
-        <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-          <form className="space-y-4" onSubmit={(event) => void analyze(event)}>
-            <label className="block">
-              <span className="label">Rechnung (Bild oder PDF)</span>
-              <div className="rounded-md border border-dashed border-line bg-cloud p-4">
-                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-ink/75">
-                  <Upload size={17} />
-                  {file?.name ?? "Bild oder PDF auswahlen"}
+    <div className="receipt-overlay">
+      <dialog ref={dialog} aria-labelledby="receipt-title" tabIndex={-1}
+        className="receipt-dialog" onKeyDown={(event) => {
+          if (event.key !== "Tab") return;
+          const controls = Array.from(dialog.current?.querySelectorAll<HTMLElement>(
+            'button:enabled, input:enabled, select:enabled, textarea:enabled, summary, a[href]',
+          ) ?? []).filter((element) => element.checkVisibility());
+          const first = controls[0];
+          const last = controls[controls.length - 1];
+          if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) {
+            event.preventDefault(); last?.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault(); first?.focus();
+          }
+        }} onCancel={(event) => {
+          event.preventDefault();
+          if (!busy.current && !rulesBusy.current) onClose();
+        }}>
+        <header className="receipt-header">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest text-moss">Gemeinsam abrechnen</p>
+              <h2 id="receipt-title" className="mt-1 text-xl font-semibold">Rechnung analysieren</h2>
+            </div>
+            <button className="icon-button shrink-0" type="button" aria-label="Schliessen"
+              disabled={pending || saving || rulesSaving} onClick={onClose}><X size={20} /></button>
+          </div>
+          <nav aria-label="Rechnungsschritte" className="mt-4 grid grid-cols-2 gap-2">
+            <button type="button" className={`receipt-step ${step === "upload" ? "receipt-step-active" : ""}`}
+              aria-current={step === "upload" ? "step" : undefined} disabled={pending || saving}
+              onClick={() => setStep("upload")}>1 · Beleg wählen</button>
+            <button type="button" className={`receipt-step ${step === "review" ? "receipt-step-active" : ""}`}
+              aria-current={step === "review" ? "step" : undefined} disabled={!analysis || pending || saving}
+              onClick={() => setStep("review")}>2 · Prüfen & teilen</button>
+          </nav>
+        </header>
+        <div ref={scrollSurface} className="receipt-scroll">
+          {error ? <div role="alert" className="mb-4 rounded-md bg-coral/10 p-3 text-sm">{error}
+            {authExpired ? <a className="secondary-button mt-3" href="/">Erneut anmelden</a> : null}
+          </div> : null}
+          <form id="receipt-form" className="space-y-4" hidden={step !== "upload"}
+            onSubmit={(event) => void analyze(event)}>
+            <fieldset disabled={pending || saving || rulesSaving} className="min-w-0 space-y-4">
+              <div className="rounded-md border border-dashed border-moss/40 bg-cloud p-4">
+                <Receipt size={28} className="mb-3 text-moss" />
+                <h3 className="font-semibold">Ein Beleg. Fair aufgeteilt.</h3>
+                <p className="mt-1 text-sm text-ink/65">Foto aufnehmen oder Bild / PDF auswählen. Danach prüfst du die Positionen und Anteile.</p>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  <button type="button" className="primary-button" onClick={() => cameraInput.current?.click()}><Camera size={18} />Foto aufnehmen</button>
+                  <button type="button" className="secondary-button" onClick={() => fileInput.current?.click()}><Upload size={18} />Datei wählen</button>
                 </div>
-                <input
-                  className="block w-full text-sm"
-                  type="file"
-                  accept="image/*,application/pdf,.pdf"
-                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                />
+                <input ref={cameraInput} aria-label="Foto aufnehmen" className="hidden" type="file" accept="image/*" capture="environment"
+                  onChange={(event) => { selectFile(event.target.files?.[0] ?? null); event.target.value = ""; }} />
+                <input ref={fileInput} aria-label="Rechnung (Bild oder PDF)" className="hidden" type="file" accept="image/*,application/pdf,.pdf"
+                  onChange={(event) => { selectFile(event.target.files?.[0] ?? null); event.target.value = ""; }} />
+                {file ? <div className="mt-3 flex items-center gap-2 rounded-md bg-white p-2 text-sm">
+                  <FileText size={18} className="shrink-0 text-moss" /><span className="min-w-0 flex-1 break-all">{file.name}</span>
+                  <button type="button" className="icon-button shrink-0" aria-label="Beleg entfernen" onClick={() => { invalidateSource(); setFile(null); }}><X size={16} /></button>
+                </div> : null}
               </div>
-            </label>
-            <label className="block">
-              <span className="label">Rechnungstext</span>
-              <textarea
-                className="input min-h-24"
-                value={form.receiptText}
-                onChange={(event) => setForm((current) => ({ ...current, receiptText: event.target.value }))}
-                placeholder="Optional: OCR-Text oder abgetippte Positionen"
-              />
-            </label>
-            <ReceiptRulesEditor
-              rules={rules}
-              loading={rulesLoading}
-              saving={rulesSaving}
-              dirty={rulesDirty}
-              onChange={(nextRules) => {
-                setRules(nextRules);
-                setRulesDirty(true);
-              }}
-              onSave={() => void saveRules().catch((unknownError) => onError(readError(unknownError)))}
-              onError={onError}
-            />
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <details className="receipt-disclosure">
+                <summary>Rechnungstext <span className="font-normal text-ink/55">· optional</span></summary>
+                <label className="block p-3 pt-0">
+                  <span className="label">Rechnungstext</span>
+                  <textarea className="input min-h-24" value={form.receiptText}
+                    onChange={(event) => { invalidateSource(); setForm((current) => ({ ...current, receiptText: event.target.value })); }}
+                    placeholder="OCR-Text oder abgetippte Positionen" />
+                </label>
+              </details>
+              <details className="receipt-disclosure">
+                <summary>Zuordnungsregeln <span className="font-normal text-ink/55">· optional</span></summary>
+                <ReceiptRulesEditor rules={rules} loading={rulesLoading} saving={rulesSaving} dirty={rulesDirty}
+                  onChange={(nextRules) => { invalidateSource(); setRules(nextRules); setRulesDirty(true); }}
+                  onSave={() => void saveRules().catch(reportError)} onError={setError} />
+              </details>
+            </fieldset>
+          </form>
+          <fieldset disabled={saving} className="mb-5 mt-4 min-w-0 space-y-3 rounded-md border border-line p-3">
+            <legend className="px-1 text-sm font-semibold text-moss">Zur Ausgabe</legend>
+            <div className="grid gap-3 sm:grid-cols-2">
               <RoommateSelect
                 label="Bezahlt von"
                 value={paidBy}
@@ -608,47 +722,42 @@ function ReceiptImportPanel({
                 onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
               />
             </label>
-            <button className="primary-button w-full" type="submit" disabled={pending}>
-              <Sparkles size={18} />
-              {pending ? "Analysiere..." : "Analysieren"}
-            </button>
-          </form>
-
-          <div className="rounded-md border border-line bg-cloud">
+          </fieldset>
+          <div hidden={step !== "review"} className="rounded-md border border-line bg-cloud">
             <div className="flex items-center justify-between border-b border-line bg-white px-4 py-3">
               <div className="flex items-center gap-2">
                 <Receipt size={18} className="text-moss" />
-                <h3 className="font-semibold">Vorschlag</h3>
+                <h3 ref={results} tabIndex={-1} className="font-semibold outline-none">Vorschlag</h3>
               </div>
               {analysis ? <span className="text-sm font-semibold">{formatMoney(analysis.totalCents)}</span> : null}
             </div>
             {analysis ? (
-              <div className="space-y-4 p-4">
+              <fieldset disabled={saving} className="min-w-0 space-y-4 p-3 sm:p-4">
                 {analysis.warnings.length ? (
                   <div className="rounded-md bg-lemon/30 px-3 py-2 text-sm text-ink">
                     {analysis.warnings.join(" ")}
                   </div>
                 ) : null}
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid grid-cols-3 gap-1.5">
                   {analysis.roommateTotals.map((split) => (
-                    <div key={split.roommateId} className="rounded-md bg-white px-3 py-2">
-                      <p className="text-sm text-ink/65">{nameFor(split.roommateId)}</p>
+                    <div key={split.roommateId} className="min-w-0 rounded-md bg-white px-2 py-2">
+                      <p className="text-xs text-ink/65">{nameFor(split.roommateId)}</p>
                       <p className="font-semibold">{formatMoney(split.amountCents)}</p>
                     </div>
                   ))}
                 </div>
-                {!receiptAnalysisIsValid(analysis) ? (
+                {analysis.items.length > 0 && !receiptAnalysisIsValid(analysis) ? (
                   <div className="rounded-md bg-coral/10 px-3 py-2 text-sm text-ink">
                     Mindestens eine Position ist noch nicht exakt aufgeteilt.
                   </div>
                 ) : null}
-                <div className="max-h-80 overflow-y-auto rounded-md border border-line bg-white">
+                <div className="rounded-md border border-line bg-white">
                   <div className="divide-y divide-line">
                     {analysis.items.map((item, index) => (
                       <article key={`${item.name}-${index}`} className="p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <h4 className="font-semibold">{item.name}</h4>
+                            <h4 className="break-words font-semibold">{item.name}</h4>
                             <p className="mt-1 text-xs text-ink/60">{item.assignmentReason}</p>
                           </div>
                           <span className="shrink-0 font-semibold">{formatMoney(item.amountCents)}</span>
@@ -658,14 +767,16 @@ function ReceiptImportPanel({
                             .map((split) => `${nameFor(split.roommateId)} ${formatMoney(split.amountCents)}`)
                             .join(" · ")}
                         </p>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                        <div className="mt-3 grid grid-cols-3 gap-2">
                           {roommateIds.map((roommateId) => (
                             <label key={roommateId} className="block">
                               <span className="mb-1 block text-xs font-semibold text-ink/65">
                                 {nameFor(roommateId)}
                               </span>
                               <input
-                                className="input py-1 text-sm"
+                                className="input px-2 py-2"
+                                aria-label={`${item.name}: ${nameFor(roommateId)} in Euro`}
+                                inputMode="decimal"
                                 step="0.01"
                                 type="number"
                                 value={euroInputFromCents(
@@ -687,6 +798,17 @@ function ReceiptImportPanel({
                             </label>
                           ))}
                         </div>
+                        <button type="button" className="mt-2 text-sm font-semibold text-moss underline underline-offset-4"
+                          onClick={() => setAnalysis((current) => {
+                            if (!current) return current;
+                            let next = current;
+                            roommateIds.forEach((id, personIndex) => {
+                              const share = Math.trunc(item.amountCents / roommateIds.length);
+                              const remainder = item.amountCents - share * roommateIds.length;
+                              next = updateReceiptItemSplit(next, index, id, share + (personIndex < Math.abs(remainder) ? Math.sign(remainder) : 0));
+                            });
+                            return next;
+                          })}>Zu dritt teilen</button>
                         <p className={`mt-2 text-xs ${receiptItemIsValid(item) ? "text-ink/55" : "text-coral"}`}>
                           Aufgeteilt: {formatMoney(item.splits.reduce((sum, split) => sum + split.amountCents, 0))}
                         </p>
@@ -694,21 +816,28 @@ function ReceiptImportPanel({
                     ))}
                   </div>
                 </div>
-                <button
-                  className="primary-button w-full"
-                  type="button"
-                  disabled={!paidBy || !receiptAnalysisIsValid(analysis)}
-                  onClick={() => void saveExpense()}
-                >
-                  Als Ausgabe speichern
-                </button>
-              </div>
+                {analysis.items.length === 0 ? <EmptyState label="Keine Positionen erkannt. Bitte den Beleg oder Rechnungstext ergänzen und erneut analysieren." /> : null}
+              </fieldset>
             ) : (
               <EmptyState label="Noch keine Analyse." />
             )}
           </div>
         </div>
-      </section>
+        <footer className="receipt-footer">
+          <p role="status" className="mb-2 text-xs text-ink/65">
+            {pending ? "Die Rechnung wird gelesen. Bitte kurz warten …" : saving ? "Ausgabe und Originalbeleg werden gespeichert …" :
+              step === "review" ? "Bitte Beträge und Aufteilung vor dem Speichern prüfen." :
+              analysis ? "Vorschlag vorhanden. Änderungen am Beleg erfordern eine neue Analyse." : "Dein Originalbeleg bleibt unverändert."}
+          </p>
+          {step === "review" ? <button className="primary-button w-full" type="button"
+            disabled={saving || pending || !paidBy || !analysis || analysis.totalCents <= 0 || !receiptAnalysisIsValid(analysis)}
+            onClick={() => void saveExpense()}>{saving ? "Speichert..." : "Als Ausgabe speichern"}</button> :
+            <button className="primary-button w-full" type="submit" form="receipt-form"
+              disabled={pending || saving || rulesSaving || (!file && !form.receiptText.trim())}>
+              <Sparkles size={18} />{pending ? "Analysiere..." : "Analysieren"}
+            </button>}
+        </footer>
+      </dialog>
     </div>
   );
 }
@@ -761,7 +890,7 @@ function ReceiptRulesEditor({
 
   return (
     <section aria-labelledby="receipt-rules-title" className="rounded-md border border-line bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2.5">
         <h3 id="receipt-rules-title" className="font-semibold">Regeln</h3>
         <div className="flex gap-2">
           <button

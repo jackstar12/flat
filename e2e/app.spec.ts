@@ -32,6 +32,7 @@ test("opens the receipt analysis workflow", async ({ page }) => {
   await page.getByRole("button", { name: "Rechnung analysieren" }).click();
 
   await expect(page.getByRole("heading", { name: "Rechnung analysieren" })).toBeVisible();
+  await page.locator("summary").filter({ hasText: "Zuordnungsregeln" }).click();
   await expect(page.getByRole("heading", { name: "Regeln" })).toBeVisible();
   await expect(page.getByText("Griechischer Joghurt", { exact: true })).toBeVisible();
   await expect(page.getByText("Skyr", { exact: true })).toBeVisible();
@@ -115,6 +116,7 @@ test("shows parsed positions and the original receipt file", async ({ page }, te
 test("persists structured receipt rules", async ({ page }, testInfo) => {
   const ruleName = `Playwright Regel ${testInfo.project.name}`;
   await page.getByRole("button", { name: "Rechnung analysieren" }).click();
+  await page.locator("summary").filter({ hasText: "Zuordnungsregeln" }).click();
   const rulesEditor = page.getByRole("heading", { name: "Regeln" }).locator("../..");
 
   await rulesEditor.getByRole("button", { name: "Regel", exact: true }).click();
@@ -125,6 +127,7 @@ test("persists structured receipt rules", async ({ page }, testInfo) => {
 
   await page.reload();
   await page.getByRole("button", { name: "Rechnung analysieren" }).click();
+  await page.locator("summary").filter({ hasText: "Zuordnungsregeln" }).click();
   const persistedEditor = page.getByRole("heading", { name: "Regeln" }).locator("../..");
   const row = persistedEditor.locator("article").filter({ hasText: ruleName });
   await expect(row).toBeVisible();
