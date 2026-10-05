@@ -2,7 +2,7 @@ import { resolve, sep } from "node:path";
 import { analyzeReceipt } from "./inference";
 import { readConfig } from "./config";
 import { LocalDatabase } from "./db";
-import { hasProxyProof, isHealthRequest } from "./proxy";
+import { hasProxyProof } from "./proxy";
 import { verifiedRoommate } from "./identity";
 import { app } from "./app";
 
@@ -23,12 +23,12 @@ const server = Bun.serve({
   hostname: config.host,
   port: config.port,
   async fetch(request) {
-    if (!isHealthRequest(request) && !hasProxyProof(request, config.proxyToken)) {
-      return new Response("Unauthorized", { status: 401 });
-    }
     const url = new URL(request.url);
-    if (url.pathname === "/healthz" || url.pathname.startsWith("/api/")) {
+    if (url.pathname === "/healthz" || url.pathname === "/api" || url.pathname.startsWith("/api/")) {
       return app.fetch(request, bindings);
+    }
+    if (!hasProxyProof(request, config.proxyToken)) {
+      return new Response("Unauthorized", { status: 401, headers: { "Cache-Control": "no-store" } });
     }
     if (!verifiedRoommate(request, config.proxyToken, config.identityMappings)) {
       return new Response("Forbidden", { status: 403, headers: { "Cache-Control": "no-store" } });
@@ -64,7 +64,7 @@ const server = Bun.serve({
       return new Response("Frontend build missing. Run `bun run build`.", { status: 503 });
     }
     return new Response(request.method === "HEAD" ? null : index, {
-      headers: { "Cache-Control": "no-cache", "Content-Type": "text/html; charset=utf-8" },
+      headers: { "Cache-Control": "private, no-store", "Content-Type": "text/html; charset=utf-8" },
     });
   },
 });

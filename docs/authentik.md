@@ -81,10 +81,40 @@ their original financial meaning and may reference any existing roommate.
 
 Caddy returns JSON 401 without Location for expired/anonymous `/api` requests;
 normal page navigation retains Authentik's top-level login redirect. The frontend
-keeps an unsaved form visible and offers **Erneut anmelden**. It never automatically
-replays a mutation. Returning to the page discards the draft; check saved data before
-submitting again, particularly if a multi-step receipt upload was interrupted.
-Logout navigates to Authentik's native outpost sign-out endpoint.
+keeps an unsaved form visible and offers **Erneut anmelden** in a separate tab.
+Leave the original tab open: its draft, selected file and analysis stay in memory
+only. After native login, return and choose **Anmeldung prüfen**; returning focus
+also revalidates the session. Only session/finance/task reads are refreshed. A
+successful check of the same roommate keeps the draft; an account change discards
+old drafts and data before loading the new account. Reloading/closing the original
+tab loses the draft. Nothing is stored in browser storage or automatically replayed.
+Check saved data before manually submitting again, especially after an interrupted
+multi-step receipt upload.
+
+Every API call except the session check carries the last verified roommate as `X-Expected-Roommate-Id`.
+This is a concurrency guard, not an authentication credential: the backend still
+requires private proxy proof and the unique email/UID mapping. A mismatch returns
+JSON 409 `identity_changed` before the route runs. This header must survive Caddy's
+identity stripping. Pending responses from a previous identity or logout are
+discarded. Logout clears in-memory identity/data/drafts before navigating to
+Authentik's native outpost sign-out endpoint; history restoration revalidates.
+
+Opaque/manual redirects are protocol errors, not proof of user expiry, and are
+never followed/replayed by the API client. JSON and multipart requests share this
+handling. Inference failures return 502 (provider/service) or 504 (timeout), never
+the provider's 401. Valid API trailing slashes are handled directly without
+redirecting POST bodies. `/api/receipts` and `/api/receipts/` are not Flat endpoints;
+both return authenticated JSON 404. Analysis uses `/api/finance/receipt/analyze`.
+
+The canonical Caddy snippet uses the expanded native `forward_auth` form to copy
+successful email/UID headers to the upstream request and all `Set-Cookie` fields
+to the browser response. It also retains cookie deletion on API auth rejection.
+Real isolated Caddy tests demonstrated that the prior identity-only `copy_headers`
+configuration dropped successful refresh cookies. This proves a forwarding defect,
+not the cause of any particular live request failure. See
+[Caddy's documented expansion](https://caddyserver.com/docs/caddyfile/directives/forward_auth#expanded-form).
+The existing Authentik 30-day session setting applies at the next login; it does
+not extend already-issued sessions.
 
 Automated tests use isolated SQLite and synthetic identities only. Final manual
 acceptance requires the user to sign in with their own email code, confirm their mapped roommate
@@ -100,3 +130,23 @@ The repair changes no Flat environment bytes, mappings, service state, database,
 financial IDs or UI. Each person's real OTP sign-in and displayed-roommate acceptance
 remain manual; no code was requested/retrieved and no live session was forged.
 The task token remains active for Hermes's independent verification and revocation.
+
+
+## Isolated auth regression checks
+
+From the staged source copy, run the normal typecheck/unit/backend/build/E2E suite.
+For the canonical proxy integration, set `FLAT_TEST_PROXY_SNIPPET` to
+`/home/jacksn/infra/files/flat/proxy.caddy` and `CADDY_TEST_BINARY` to an installed
+Caddy binary when running Playwright. Use Node on PATH for Playwright, and set
+`PLAYWRIGHT_CHROMIUM_PATH` if its pinned browser is not installed. The optional
+proxy fixture uses synthetic Authentik responses, a loopback Caddy listener and
+the same temporary SQLite backend; it refuses live port 8787. It checks actual
+cookie forwarding, multipart routes, exact Origin, spoof stripping, stale-actor
+rejection, draft-safe re-login, account switches and logout. It does not prove
+live native OTP login. All reports and build outputs stay in staging.
+
+Digital PDFs now supply bounded embedded text alongside rasterized pages to avoid
+misreading cents in otherwise legible text. Text/images remain temporary and are
+removed after inference. Ambiguous product abbreviations remain `Sonstiges` with
+a warning instead of guessing a category. Private PDF regression artifacts must
+remain outside Git; regression analysis must not save an expense.

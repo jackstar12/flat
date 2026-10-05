@@ -6,7 +6,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { deleteCookie } from "hono/cookie";
 import { z } from "zod";
-import { analyzeReceipt } from "./inference";
+import { analyzeReceipt, InferenceError } from "./inference";
 import type { LocalDatabase } from "./db";
 import { household, roommateIds, roommates, findRoommate } from "../src/shared/config";
 import {
@@ -282,9 +282,10 @@ const receiptAssignmentRulesSchema = z
     });
   });
 
-const app = new Hono<AppBindings>();
+const app = new Hono<AppBindings>({ strict: false });
 
 app.use("*", async (c, next) => {
+  c.header("Cache-Control", "no-store");
   if (!isHealthRequest(c.req.raw) && !hasProxyProof(c.req.raw, c.env.PROXY_TOKEN)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
@@ -310,6 +311,12 @@ app.use("/api/*", async (c, next) => {
   }
   const roommate = verifiedRoommate(c.req.raw, c.env.PROXY_TOKEN, c.env.IDENTITY_MAP);
   if (!roommate) return c.json({ error: "Keine eindeutige WG-Zuordnung. Bitte den Administrator kontaktieren." }, 403);
+  // A browser's remembered actor is a concurrency guard, never identity proof.
+  // The proxy intentionally strips X-Flat-*; this distinct header must survive.
+  const expectedActor = c.req.header("X-Expected-Roommate-Id");
+  if (expectedActor !== undefined && expectedActor !== roommate.id) {
+    return c.json({ error: "Das angemeldete Konto hat sich geändert.", code: "identity_changed" }, 409);
+  }
   c.set("roommate", roommate);
   await next();
 });
@@ -508,7 +515,7 @@ app.get("/api/finance/expenses/:id/receipt-file", async (c) => {
       "Content-Type": upload.mime_type,
       "Content-Length": String(upload.size_bytes),
       "Content-Disposition": `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(upload.original_name)}`,
-      "Cache-Control": "private, max-age=3600",
+      "Cache-Control": "private, no-store",
     },
   });
 });
@@ -679,11 +686,18 @@ app.post("/api/finance/receipt/analyze", async (c) => {
 
   const rules = await listReceiptAssignmentRules(c.env.DB);
   const prompt = buildReceiptPrompt(rules, receiptText);
-  const response = await c.env.analyzeReceipt({
-    prompt,
-    document: file,
-    outputSchema: receiptJsonSchema(),
-  });
+  let response: string;
+  try {
+    response = await c.env.analyzeReceipt({ prompt, document: file, outputSchema: receiptJsonSchema() });
+  } catch (error) {
+    // Provider credentials, redirects and timeouts are service failures, not
+    // expiry of the person's Authentik session. Never forward upstream status.
+    const timeout = error instanceof InferenceError && error.code === "timeout";
+    return c.json({
+      error: timeout ? "Die Rechnungsanalyse hat zu lange gedauert. Bitte später selbst erneut versuchen." : "Der Analysedienst ist derzeit nicht verfügbar. Bitte später selbst erneut versuchen.",
+      code: timeout ? "inference_timeout" : "inference_unavailable",
+    }, timeout ? 504 : 502);
+  }
   const parsed = parseModelJson(response);
   const analysis = applyReceiptLearning(c.env.DB, normalizeReceiptAnalysis(parsed, roommateIds, rules), rules);
   const analysisId = crypto.randomUUID();
@@ -1337,6 +1351,7 @@ Rules:
 - Preserve the exact printed product label in "name".
 - Set "normalizedName" to a stable generic German product name for tracking: for example every egg SKU becomes "Eier", apple variants become "Äpfel", and milk brands become "Milch".
 - Set "category" to exactly one of: ${receiptTrackingCategories.join(", ")}.
+- If an abbreviated label does not identify the actual product unambiguously, preserve the label as normalizedName, use category "Sonstiges" and add a warning. Do not guess a product from an abbreviation.
 - Choose categories by the actual product, not by the roommate assignment rule. Coupons, discounts, Pfand and Leergut belong to "Pfand & Rabatte".
 - Omit zero-priced items, payment lines, tax summaries, loyalty points, and savings summary lines.
 - Preserve coupons and discounts as separate negative line items. Apply a matching coupon rule; never net them into the related product.
@@ -1436,6 +1451,8 @@ class HTTPError extends Error {
     super(message);
   }
 }
+
+app.notFound((c) => c.json({ error: "API-Pfad nicht gefunden.", code: "not_found" }, 404));
 
 app.onError((error, c) => {
   if (error instanceof HTTPError) {

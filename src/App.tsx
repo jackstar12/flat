@@ -1,3 +1,4 @@
+import { api, apiForm, ApiError, checkSession, clearIdentity, expiryMessage, authenticationRequired } from "./api";
 import {
   Banknote,
   CalendarDays,
@@ -21,7 +22,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { FormEvent, ReactNode, useEffect, useId, useRef, useState } from "react";
 import { roommates, roommateIds, findRoommate, household } from "./shared/config";
 import { normalizeReceiptIdentity } from "./shared/receipt-learning";
@@ -132,11 +133,35 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>("finanzen");
   const [finance, setFinance] = useState<FinancePayload | null>(null);
   const [tasks, setTasks] = useState<TasksPayload | null>(null);
-  const [authExpired, setAuthExpired] = useState(false);
+  const [authExpired, setAuthExpired] = useState(authenticationRequired);
+  const [identityRevision, setIdentityRevision] = useState(0);
+  const sessionRef = useRef<SessionPayload | null>(null);
+  const checking = useRef(false);
+  const loggingOut = useRef(false);
   useEffect(() => {
     const expired = () => setAuthExpired(true);
     window.addEventListener("flat-auth-expired", expired);
-    return () => window.removeEventListener("flat-auth-expired", expired);
+    const verify = () => { void revalidate(); };
+    const accountChanged = () => {
+      setSession(null); sessionRef.current = null;
+      setFinance(null); setTasks(null); setIdentityRevision((value) => value + 1);
+      setError("Das angemeldete Konto hat sich geändert. Entwürfe wurden verworfen. Bitte Anmeldung prüfen.");
+    };
+    const restoredPage = (event: PageTransitionEvent) => {
+      if (event.persisted) { loggingOut.current = false; clearIdentity(); accountChanged(); }
+      verify();
+    };
+    window.addEventListener("flat-auth-check", verify);
+    window.addEventListener("flat-account-changed", accountChanged);
+    window.addEventListener("focus", verify);
+    window.addEventListener("pageshow", restoredPage);
+    return () => {
+      window.removeEventListener("flat-auth-expired", expired);
+      window.removeEventListener("flat-auth-check", verify);
+      window.removeEventListener("flat-account-changed", accountChanged);
+      window.removeEventListener("focus", verify);
+      window.removeEventListener("pageshow", restoredPage);
+    };
   }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -146,16 +171,19 @@ export default function App() {
   }, []);
 
   async function bootstrap() {
+    checking.current = true;
     setLoading(true);
     try {
-      const nextSession = await api<SessionPayload>("/api/session");
+      const { session: nextSession } = await checkSession();
+      sessionRef.current = nextSession;
       setSession(nextSession);
-      if (nextSession.authenticated) {
+      if (nextSession.authenticated && !reauthReturn) {
         await Promise.all([loadFinance(), loadTasks()]);
       }
     } catch (unknownError) {
       setError(readError(unknownError));
     } finally {
+      checking.current = false;
       setLoading(false);
     }
   }
@@ -168,9 +196,37 @@ export default function App() {
     setTasks(await api<TasksPayload>("/api/tasks"));
   }
 
+  async function revalidate() {
+    if (checking.current || loggingOut.current) return;
+    checking.current = true;
+    try {
+      const { session: next, accountChanged } = await checkSession();
+      const wasMissing = !sessionRef.current;
+      if (accountChanged || wasMissing) {
+        setFinance(null); setTasks(null);
+        setIdentityRevision((value) => value + 1);
+      }
+      sessionRef.current = next;
+      setSession(next); setAuthExpired(false);
+      setError(accountChanged ? "Konto gewechselt. Vorherige Entwürfe wurden verworfen." : null);
+      if (!reauthReturn) await Promise.all([loadFinance(), loadTasks()]);
+    } catch (unknownError) {
+      setError(readError(unknownError));
+    } finally { checking.current = false; }
+  }
+
   async function logout() {
+    loggingOut.current = true;
+    clearIdentity();
+    sessionRef.current = null;
+    flushSync(() => {
+      setSession(null); setFinance(null); setTasks(null);
+      setIdentityRevision((value) => value + 1);
+    });
     window.location.assign("/outpost.goauthentik.io/sign_out");
   }
+
+  const reauthReturn = new URLSearchParams(window.location.search).get("reauth") === "1";
 
   if (loading) {
     return <LoadingScreen />;
@@ -180,16 +236,22 @@ export default function App() {
     return <main className="grid min-h-screen place-items-center bg-cloud px-4 text-ink">
       <section><h1 className="text-2xl">Anmeldung erforderlich</h1>
         <p>{error ?? "Bitte erneut anmelden."}</p>
-        <a className="primary-button mt-4" href="/">Erneut anmelden</a>
+        <ReauthControls />
       </section>
     </main>;
   }
 
+  if (reauthReturn) return <main className="grid min-h-screen place-items-center bg-cloud px-4 text-ink"><section>
+    <h1 className="text-2xl">Angemeldet als {session.roommate?.name}</h1>
+    <p>Zum ursprünglichen Tab zurückkehren und „Anmeldung prüfen“ wählen. Der Entwurf bleibt dort; nichts wurde wiederholt.</p>
+    <a className="secondary-button mt-4" href="/">Flat öffnen</a>
+  </section></main>;
+
   return (
     <div className="min-h-screen bg-cloud text-ink">
       {authExpired && <div role="alert" className="global-auth-alert fixed inset-x-0 top-0 z-30 border-b border-line bg-white p-4 shadow-soft">
-        Anmeldung abgelaufen. Die Anfrage wird nicht automatisch wiederholt. Bitte nach der Anmeldung den Speicherstand prüfen.
-        <a className="primary-button ml-4" href="/">Erneut anmelden</a>
+        {expiryMessage}
+        <ReauthControls />
       </div>}
       <header className="border-b border-line bg-white/90">
         <div className="app-shell mx-auto max-w-7xl px-4 sm:px-6">
@@ -199,7 +261,7 @@ export default function App() {
             <NavButton active={activeView === "aufgaben"} icon={<ClipboardList size={18} />} label="Aufgaben" onClick={() => setActiveView("aufgaben")} />
           </nav>
           <div className="app-identity flex items-center justify-end gap-2">
-            <PersonBadge roommate={session.roommate} />
+            {authExpired ? <span className="text-sm">Anmeldung erforderlich</span> : <PersonBadge roommate={session.roommate} />}
             <button className="icon-button shrink-0" type="button" title="Abmelden" onClick={() => void logout()}><LogOut size={18} /></button>
           </div>
         </div>
@@ -208,7 +270,7 @@ export default function App() {
       <main className="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6">
         {error ? (
           <div className="mb-4 flex items-center justify-between rounded-md border border-coral/30 bg-coral/10 px-4 py-3 text-sm text-ink">
-            <span>{error}</span>
+            <span>{error}{error.includes("Anmeldung prüfen") ? <ReauthControls /> : null}</span>
             <button className="icon-button h-8 w-8" type="button" title="Schliessen" onClick={() => setError(null)}>
               <X size={16} />
             </button>
@@ -216,14 +278,14 @@ export default function App() {
         ) : null}
 
         {activeView === "finanzen" ? (
-          <FinanceView
+          <FinanceView key={`finance-${identityRevision}`}
             data={finance}
             authenticatedRoommateId={session.roommate?.id}
             onChanged={() => void loadFinance().catch((unknownError) => setError(readError(unknownError)))}
             onError={setError}
           />
         ) : (
-          <TasksView
+          <TasksView key={`tasks-${identityRevision}`}
             data={tasks}
             onChanged={() => void loadTasks().catch((unknownError) => setError(readError(unknownError)))}
             onError={setError}
@@ -490,7 +552,7 @@ function ReceiptImportPanel({
   const [pending, setPending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [authExpired, setAuthExpired] = useState(false);
+  const [authExpired, setAuthExpired] = useState(authenticationRequired);
   const [step, setStep] = useState<"upload" | "review">("upload");
   const busy = useRef(false);
   const rulesBusy = useRef(false);
@@ -504,6 +566,8 @@ function ReceiptImportPanel({
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const expired = () => setAuthExpired(true);
+    const restored = () => { setAuthExpired(false); setError((value) => value.includes("Anmeldung") ? "" : value); };
+    window.addEventListener("flat-auth-restored", restored);
     window.addEventListener("flat-auth-expired", expired);
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -512,6 +576,7 @@ function ReceiptImportPanel({
     modal?.focus();
     return () => {
       window.removeEventListener("flat-auth-expired", expired);
+      window.removeEventListener("flat-auth-restored", restored);
       document.body.style.overflow = overflow;
       modal?.close();
       previous?.focus();
@@ -674,8 +739,8 @@ function ReceiptImportPanel({
         </header>
         <div ref={scrollSurface} className="receipt-scroll">
           {saveLocked ? <p className="mb-3 rounded-md bg-lemon/30 p-3 text-sm">{createdExpenseId ? "Ausgabe gebucht. Nur der Originalbeleg wird noch hochgeladen; beim Wiederholen entsteht keine zweite Ausgabe." : "Speicherversuch begonnen. Bitte mit denselben Angaben wiederholen oder den gespeicherten Stand prüfen."}</p> : null}
-          {error ? <div role="alert" className="mb-4 rounded-md bg-coral/10 p-3 text-sm">{error}
-            {authExpired ? <a className="secondary-button mt-3" href="/">Erneut anmelden</a> : null}
+          {error || authExpired ? <div role="alert" className="mb-4 rounded-md bg-coral/10 p-3 text-sm">{authExpired ? expiryMessage : error}
+            {authExpired || error.includes("Anmeldung prüfen") ? <ReauthControls /> : null}
           </div> : null}
           <form id="receipt-form" className="space-y-4" hidden={step !== "upload"}
             onSubmit={(event) => void analyze(event)}>
@@ -879,7 +944,7 @@ function ReceiptLearningControls() {
     finally { busy.current = false; setPending(false); }
   }
   return <section aria-label="Gelernte Aufteilungen" className="space-y-3">
-    {error ? <p role="alert" className="text-sm text-coral">{error}{error.includes("Anmeldung") ? <a className="secondary-button mt-2" href="/">Erneut anmelden</a> : null}</p> : null}
+    {error ? <p role="alert" className="text-sm text-coral">{error}{error.includes("Anmeldung") ? <ReauthControls /> : null}</p> : null}
     {!state ? <p className="text-sm text-ink/65">{error ? "Lernstand konnte nicht geladen werden." : "Lernstand wird geladen …"}</p> : <>
       <label className="flex min-h-11 items-center gap-3 text-sm font-semibold">
         <input type="checkbox" className="rounded border-line text-moss" checked={state.enabled} disabled={pending}
@@ -909,17 +974,19 @@ function FormDialog({ title, onClose, pending = false, error, children }: {
 }) {
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
-  const [expired, setExpired] = useState(false);
+  const [expired, setExpired] = useState(authenticationRequired);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const modal = dialog.current;
     const overflow = document.body.style.overflow;
     const expiry = () => setExpired(true);
+    const restored = () => setExpired(false);
+    window.addEventListener("flat-auth-restored", restored);
     window.addEventListener("flat-auth-expired", expiry);
     document.body.style.overflow = "hidden";
     modal?.showModal();
     modal?.focus();
-    return () => { window.removeEventListener("flat-auth-expired", expiry); document.body.style.overflow = overflow; modal?.close(); previous?.focus(); };
+    return () => { window.removeEventListener("flat-auth-restored", restored); window.removeEventListener("flat-auth-expired", expiry); document.body.style.overflow = overflow; modal?.close(); previous?.focus(); };
   }, []);
   return createPortal(<dialog ref={dialog} tabIndex={-1} aria-labelledby={id} className="form-dialog"
     onCancel={(event) => { event.preventDefault(); if (!pending) onClose(); }}
@@ -933,8 +1000,8 @@ function FormDialog({ title, onClose, pending = false, error, children }: {
       <h2 id={id} className="text-lg font-semibold">{title}</h2>
       <button type="button" className="icon-button shrink-0" aria-label="Schliessen" disabled={pending} onClick={onClose}><X size={18} /></button>
     </header>
-    {error ? <div role="alert" className="shrink-0 border-b border-line bg-coral/10 px-4 py-2 text-sm">{expired ? "Anmeldung abgelaufen. Die Anfrage wird nicht automatisch wiederholt. Bitte nach der Anmeldung den Speicherstand prüfen." : error}</div> : null}
-    {expired ? <a className="secondary-button mx-4 my-2" href="/">Erneut anmelden</a> : null}
+    {error ? <div role="alert" className="shrink-0 border-b border-line bg-coral/10 px-4 py-2 text-sm">{expired ? expiryMessage : error.includes("Anmeldung abgelaufen") ? "Anmeldung geprüft. Bitte Speicherstand kontrollieren und bei Bedarf selbst erneut speichern." : error}</div> : null}
+    {expired || error?.includes("Anmeldung prüfen") ? <ReauthControls /> : null}
     {children}
   </dialog>, document.body);
 }
@@ -2130,65 +2197,6 @@ function LoadingScreen() {
   );
 }
 
-class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
-}
-
-async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "include",
-    redirect: "manual",
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
-
-  if (response.status === 401 || response.type === "opaqueredirect") {
-    window.dispatchEvent(new Event("flat-auth-expired"));
-    throw new ApiError("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.", response.status);
-  }
-  if (!response.ok) {
-    let message = "Anfrage fehlgeschlagen.";
-    try {
-      const body = (await response.json()) as { error?: string };
-      message = body.error ?? message;
-    } catch {
-      message = response.statusText || message;
-    }
-    throw new ApiError(message, response.status);
-  }
-
-  return (await response.json()) as T;
-}
-
-async function apiForm<T = unknown>(path: string, body: FormData, method = "POST"): Promise<T> {
-  const response = await fetch(path, {
-    method,
-    credentials: "include",
-    redirect: "manual",
-    body,
-  });
-
-  if (response.status === 401 || response.type === "opaqueredirect") {
-    window.dispatchEvent(new Event("flat-auth-expired"));
-    throw new ApiError("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.", response.status);
-  }
-  if (!response.ok) {
-    let message = "Anfrage fehlgeschlagen.";
-    try {
-      const payload = (await response.json()) as { error?: string };
-      message = payload.error ?? message;
-    } catch {
-      message = response.statusText || message;
-    }
-    throw new ApiError(message, response.status);
-  }
-
-  return (await response.json()) as T;
-}
-
 async function submitExpense(form: ExpenseForm, id?: string): Promise<void> {
   if (!form.paidBy) {
     throw new Error("Bitte eine zahlende Person auswählen.");
@@ -2435,4 +2443,12 @@ function segmentClass(active: boolean): string {
     "flex-1 rounded px-3 py-2 text-sm font-semibold transition",
     active ? "bg-white text-ink shadow-sm" : "text-ink/70 hover:text-ink",
   ].join(" ");
+}
+
+function ReauthControls() {
+  return <span className="my-2 flex flex-wrap gap-2">
+    <a className="secondary-button" href="/?reauth=1" target="_blank" rel="noopener noreferrer">Erneut anmelden</a>
+    <button className="secondary-button" type="button" onClick={() => window.dispatchEvent(new Event("flat-auth-check"))}>Anmeldung prüfen</button>
+    <span className="w-full text-sm">Anmeldung öffnet einen neuen Tab. Diesen Tab für den Entwurf offen lassen.</span>
+  </span>;
 }

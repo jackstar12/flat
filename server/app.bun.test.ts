@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bu
 import { roommateIds } from "../src/shared/config";
 import { weekdayOfDate } from "../src/shared/tasks";
 import { app } from "./app";
+import { InferenceError } from "./inference";
 import { parseIdentityMappings } from "./identity";
 import { createHmac } from "node:crypto";
 import { parseTrustedOrigins } from "./config";
@@ -387,4 +388,44 @@ describe("conservative receipt learning", () => {
     expect(result.analysis.items[0].assignmentReason).toBe("WG-Regel: Beeren");
   });
 
+});
+
+// Authentication failures must be distinguishable from inference/protocol failures.
+describe("auth lifecycle route regressions", () => {
+  const headers = { ...identityHeaders, "X-Flat-Proxy-Token": proxyToken, Origin: origin };
+  test("trailing slashes never redirect multipart bodies; unknown receipt paths stay JSON 404", async () => {
+    for (const path of ["/api/finance/receipt/analyze", "/api/finance/receipt/analyze/"]) {
+      const body = new FormData();
+      const response = await app.request(path, { method: "POST", headers, body }, bindings());
+      expect(response.status).toBe(400);
+      expect(response.headers.has("Location")).toBe(false);
+      expect(await response.json()).toMatchObject({ error: "Bitte Rechnungsbild oder Rechnungstext angeben." });
+    }
+    for (const path of ["/api", "/api/receipts", "/api/receipts/"]) {
+      const response = await app.request(path, { headers }, bindings());
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ code: "not_found" });
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    }
+  });
+  test("provider 401/redirect/timeout cannot become user expiry or write an analysis draft", async () => {
+    for (const message of ["Rechnungsanalyse fehlgeschlagen (HTTP 401).", "Redirect", "Rechnungsanalyse hat das Zeitlimit uberschritten."]) {
+      const body = new FormData(); body.set("receiptText", "Synthetic receipt");
+      const response = await app.request("/api/finance/receipt/analyze", { method: "POST", headers, body }, {
+        ...bindings(), analyzeReceipt: async () => { throw new InferenceError(message, message.includes("Zeitlimit") ? "timeout" : "unavailable"); },
+      });
+      expect(response.status).toBe(message.includes("Zeitlimit") ? 504 : 502);
+      expect((await response.json() as { error: string }).error).not.toContain("401");
+    }
+    expect(database.prepare("SELECT COUNT(*) AS count FROM receipt_analysis_drafts").first()).toMatchObject({ count: 0 });
+  });
+  test("stale actor rejects both reads and mutations before route processing", async () => {
+    for (const [path, method] of [["/api/finance", "GET"], ["/api/finance/receipt/analyze", "POST"]]) {
+      const response = await app.request(path, { method, headers: { ...headers, "X-Expected-Roommate-Id": "stadlmann" } }, bindings());
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "identity_changed" });
+    }
+    const denied = await app.request("/api/session", { headers: { "X-Expected-Roommate-Id": "kran" } }, bindings());
+    expect(denied.status).toBe(401); // concurrency marker is not authentication
+  });
 });

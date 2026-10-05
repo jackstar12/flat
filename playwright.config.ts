@@ -26,7 +26,7 @@ export default defineConfig({
   webServer: [{
     command: "bun server/index.ts",
     env: {
-      FLAT_TRUSTED_ORIGINS: e2eBaseUrl,
+      FLAT_TRUSTED_ORIGINS: `${e2eBaseUrl},http://127.0.0.1:${process.env.E2E_AUTH_PROXY_PORT ?? e2ePort + 3}`,
       FLAT_PROXY_TOKEN: "a".repeat(64),
       FLAT_IDENTITY_MAP: JSON.stringify([
         { email: "owner@example.test", uid: "fixture-owner", roommateId: "kran" },
@@ -60,7 +60,17 @@ export default defineConfig({
     url: `http://127.0.0.1:${process.env.E2E_LEARNING_PORT ?? e2ePort + 2}/healthz`,
     reuseExistingServer: false,
     timeout: 30_000,
-  }],
+  }, ...(process.env.FLAT_TEST_PROXY_SNIPPET ? [{
+    command: "bun e2e/auth-proxy-server.ts",
+    env: {
+      FLAT_E2E_AUTH_PROXY: "synthetic-only",
+      E2E_BACKEND_URL: e2eBaseUrl,
+      E2E_AUTH_PROXY_PORT: String(process.env.E2E_AUTH_PROXY_PORT ?? e2ePort + 3),
+    },
+    url: `http://127.0.0.1:${process.env.E2E_AUTH_PROXY_PORT ?? e2ePort + 3}/outpost.goauthentik.io/start`,
+    reuseExistingServer: false,
+    timeout: 30_000,
+  }] : [])],
   projects: [
     {
       name: "chromium",

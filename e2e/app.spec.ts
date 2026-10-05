@@ -212,10 +212,15 @@ test("expired expense authentication offers top-level login without replay", asy
   await page.getByLabel("Betrag", { exact: true }).fill("12,00");
   await page.getByRole("button", { name: "Speichern", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("nicht automatisch wiederholt");
-  await expect(page.getByRole("link", { name: "Erneut anmelden" })).toHaveAttribute("href", "/");
+  await expect(page.getByRole("link", { name: "Erneut anmelden" })).toHaveAttribute("href", "/?reauth=1");
   await expect(page.getByLabel("Beschreibung")).toHaveValue("Unsaved expired request");
   expect(posts).toBe(1);
+  const popupPromise = page.waitForEvent("popup");
   await page.getByRole("link", { name: "Erneut anmelden" }).click();
-  await expect(page.getByRole("heading", { name: "Finanzen", exact: true })).toBeVisible();
+  const popup = await popupPromise;
+  await expect(popup.getByRole("heading", { name: /Angemeldet als/ })).toBeVisible();
+  await page.getByRole("button", { name: "Anmeldung prüfen" }).click();
+  await expect(page.getByLabel("Beschreibung")).toHaveValue("Unsaved expired request");
   expect(posts).toBe(1);
+  await popup.close();
 });

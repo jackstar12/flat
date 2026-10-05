@@ -150,12 +150,17 @@ test("expired mutation preserves draft, login redirect and 401 stay network resp
   await expect(page.getByLabel("Beschreibung")).toHaveValue("Private unsaved PWA draft");
   expect((await state(context)).mutationRequests).toBe(1);
   await noPrivateStorage(page);
+  const popupPromise = page.waitForEvent("popup");
   await page.getByRole("link", { name: "Erneut anmelden" }).click();
-  await expect(page).toHaveURL(`${origin}/outpost.goauthentik.io/start`);
-  await expect(page.getByRole("heading", { name: "Synthetic sign-in" })).toBeVisible();
-  await expect(page.getByText("Private unsaved PWA draft")).toHaveCount(0);
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL(`${origin}/outpost.goauthentik.io/start`);
+  await expect(popup.getByRole("heading", { name: "Synthetic sign-in" })).toBeVisible();
+  await expect(page.getByLabel("Beschreibung")).toHaveValue("Private unsaved PWA draft");
   await noPrivateStorage(page);
   await context.request.get("/__test/login");
+  await page.getByRole("button", { name: "Anmeldung prüfen" }).click();
+  await expect(page.getByLabel("Beschreibung")).toHaveValue("Private unsaved PWA draft");
+  await popup.close();
   for (const status of [401, 503]) {
     await context.request.post("/__test/state", { data: { navigationStatus: status } });
     expect((await page.goto("/"))?.status()).toBe(status);

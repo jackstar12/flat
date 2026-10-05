@@ -33,10 +33,16 @@ have no offline fallback. An already open page can still display data or a draft
 in memory; this feature does not make that data available after an offline reload
 and does not add storage for it.
 
-An expired API session retains the existing **Erneut anmelden** behavior. A draft
-stays visible until you navigate away. Nothing is automatically resubmitted.
-After signing in, inspect the saved state before re-entering a transaction,
-especially after an interrupted multi-step receipt upload.
+For an expired API session, **Erneut anmelden** opens native login in a separate
+tab/window. Keep the original app window open to retain its draft and selected
+file in memory; reloading or closing it loses them. Return and use **Anmeldung
+prüfen** (focus also checks). The same roommate retains the draft; a changed
+account clears it and reloads data. Nothing is automatically resubmitted or stored
+persistently. Inspect the saved state before manually retrying, especially after
+an interrupted multi-step receipt upload. Browser and installed-app cookie stores
+may differ: if the original window still reports expiry after login, its session
+has not been restored. Do not reload the original window until the draft is no
+longer needed.
 
 ## Implementation and updates
 
