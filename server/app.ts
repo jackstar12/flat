@@ -1,3 +1,4 @@
+import { analyzeWithJev, type ReceiptDecisionConfig } from "./receipt-decisions";
 import { applyReceiptLearning, correctionStatements, getAnalysisDraft, invalidateReceiptEvidence, learningState, receiptHash } from "./receipt-learning";
 import { normalizeReceiptIdentity } from "../src/shared/receipt-learning";
 import { verifiedRoommate, type IdentityMapping } from "./identity";
@@ -41,6 +42,7 @@ type Env = {
   IDENTITY_MAP: readonly IdentityMapping[];
   TRUSTED_ORIGINS: readonly string[];
   analyzeReceipt: typeof analyzeReceipt;
+  receiptDecisions?: ReceiptDecisionConfig;
 };
 
 type AppBindings = {
@@ -685,10 +687,15 @@ app.post("/api/finance/receipt/analyze", async (c) => {
   }
 
   const rules = await listReceiptAssignmentRules(c.env.DB);
-  const prompt = buildReceiptPrompt(rules, receiptText);
-  let response: string;
+  let initialAnalysis;
   try {
-    response = await c.env.analyzeReceipt({ prompt, document: file, outputSchema: receiptJsonSchema() });
+    if (c.env.receiptDecisions?.provider === "jev") {
+      initialAnalysis = await analyzeWithJev({ text: receiptText, document: file, rules,
+        roommateIds, extract: c.env.analyzeReceipt, transport: c.env.receiptDecisions.transport });
+    } else {
+      const response = await c.env.analyzeReceipt({ prompt: buildReceiptPrompt(rules, receiptText), document: file, outputSchema: receiptJsonSchema() });
+      initialAnalysis = normalizeReceiptAnalysis(parseModelJson(response), roommateIds, rules);
+    }
   } catch (error) {
     // Provider credentials, redirects and timeouts are service failures, not
     // expiry of the person's Authentik session. Never forward upstream status.
@@ -698,8 +705,7 @@ app.post("/api/finance/receipt/analyze", async (c) => {
       code: timeout ? "inference_timeout" : "inference_unavailable",
     }, timeout ? 504 : 502);
   }
-  const parsed = parseModelJson(response);
-  const analysis = applyReceiptLearning(c.env.DB, normalizeReceiptAnalysis(parsed, roommateIds, rules), rules);
+  const analysis = applyReceiptLearning(c.env.DB, initialAnalysis, rules);
   const analysisId = crypto.randomUUID();
   const attachmentHash = file ? receiptHash(new Uint8Array(await file.arrayBuffer())) : null;
   c.env.DB.prepare("DELETE FROM receipt_analysis_drafts WHERE transaction_id IS NULL AND created_at < ?")

@@ -1,3 +1,4 @@
+import { receiptDecisionConfig } from "./receipt-decisions";
 import { resolve, sep } from "node:path";
 import { analyzeReceipt } from "./inference";
 import { readConfig } from "./config";
@@ -7,6 +8,7 @@ import { verifiedRoommate } from "./identity";
 import { app } from "./app";
 
 const config = readConfig();
+const receiptDecisions = receiptDecisionConfig();
 const database = new LocalDatabase(config.databasePath);
 const migrations = database.migrate();
 const bindings = {
@@ -15,6 +17,7 @@ const bindings = {
   IDENTITY_MAP: config.identityMappings,
   TRUSTED_ORIGINS: config.trustedOrigins,
   analyzeReceipt: analyzeReceipt,
+  receiptDecisions,
 };
 const apiOnly = process.argv.includes("--api-only");
 const distDirectory = resolve(import.meta.dir, "../dist");
