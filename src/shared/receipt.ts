@@ -1,16 +1,18 @@
+import { allocateReceiptRatio, matchingReceiptRule } from "./receipt-learning";
 import { splitEvenly } from "./finance";
 import { receiptTrackingCategories } from "./types";
-import type { ReceiptAnalysis, ReceiptItem, ReceiptSplit, ReceiptTrackingCategory } from "./types";
+import type { ReceiptAnalysis, ReceiptAssignmentRule, ReceiptItem, ReceiptSplit, ReceiptTrackingCategory } from "./types";
 
 export function normalizeReceiptAnalysis(
   raw: unknown,
   stableRoommateOrder: string[],
+  rules: ReceiptAssignmentRule[] = [],
 ): ReceiptAnalysis {
   const source = asRecord(raw);
   const warnings: string[] = [];
   const items = Array.isArray(source.items)
     ? source.items
-        .map((item, index) => normalizeReceiptItem(item, index, stableRoommateOrder, warnings))
+        .map((item, index) => normalizeReceiptItem(item, index, stableRoommateOrder, warnings, rules))
         .filter((item): item is ReceiptItem => Boolean(item))
     : [];
 
@@ -55,6 +57,7 @@ function normalizeReceiptItem(
   index: number,
   stableRoommateOrder: string[],
   warnings: string[],
+  rules: ReceiptAssignmentRule[],
 ): ReceiptItem | null {
   const item = asRecord(rawItem);
   const amountCents = normalizeNonZeroInteger(item.amountCents);
@@ -76,8 +79,13 @@ function normalizeReceiptItem(
       itemName,
     );
 
-  const splits =
-    requiresExactEqualSplit
+  const identifiedRule = rules.find((rule) => rule.id === item.assignmentRuleId);
+  const literalRule = matchingReceiptRule({ name: itemName, normalizedName: normalizeNullableString(item.normalizedName) ?? itemName, category: normalizeTrackingCategory(item.category) }, rules);
+  const explicitRule = identifiedRule?.target === "item" ? identifiedRule
+    : literalRule?.target === "item" ? literalRule : identifiedRule ?? literalRule;
+  const splits = explicitRule
+    ? allocateReceiptRatio(amountCents, stableRoommateOrder.map((id) => explicitRule.shares[id] ?? 0), stableRoommateOrder)
+    : requiresExactEqualSplit
       ? splitSignedEvenly(amountCents, stableRoommateOrder)
       : proposedSplits.length > 0 && sumReceiptSplitCents(proposedSplits) === amountCents
       ? orderSplits(proposedSplits, stableRoommateOrder)
@@ -93,7 +101,7 @@ function normalizeReceiptItem(
     category: normalizeTrackingCategory(item.category),
     quantity: normalizeNullableString(item.quantity),
     amountCents,
-    assignmentReason,
+    assignmentReason: explicitRule ? `WG-Regel: ${explicitRule.match}` : assignmentReason,
     splits,
   };
 }

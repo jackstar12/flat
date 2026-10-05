@@ -1,3 +1,5 @@
+import { applyReceiptLearning, correctionStatements, getAnalysisDraft, invalidateReceiptEvidence, learningState, receiptHash } from "./receipt-learning";
+import { normalizeReceiptIdentity } from "../src/shared/receipt-learning";
 import { verifiedRoommate, type IdentityMapping } from "./identity";
 import { hasProxyProof, isHealthRequest } from "./proxy";
 import { zValidator } from "@hono/zod-validator";
@@ -182,6 +184,7 @@ const expenseSchema = z
     participantIds: z.array(roommateIdSchema).default([]),
     splits: z.array(splitSchema).default([]),
     receiptItems: z.array(receiptItemSchema).max(500).optional(),
+    receiptAnalysisId: z.string().uuid().optional(),
     receiptSourceRef: z.string().trim().min(1).max(120).optional(),
   })
   .superRefine((value, context) => {
@@ -263,11 +266,11 @@ const receiptAssignmentRuleSchema = z.object({
 });
 
 const receiptAssignmentRulesSchema = z
-  .object({ rules: z.array(receiptAssignmentRuleSchema).max(100) })
+  .object({ rules: z.array(receiptAssignmentRuleSchema).max(100), revision: z.string().optional() })
   .superRefine(({ rules }, context) => {
     const identities = new Set<string>();
     rules.forEach((rule, index) => {
-      const identity = `${rule.target}:${rule.match.toLocaleLowerCase("de")}`;
+      const identity = `${rule.target}:${normalizeReceiptIdentity(rule.match)}`;
       if (identities.has(identity)) {
         context.addIssue({
           code: "custom",
@@ -337,6 +340,31 @@ app.post("/api/finance/expenses", zValidator("json", expenseSchema), async (c) =
   const id = crypto.randomUUID();
   const actor = c.get("roommate");
   const receiptItems = (input.receiptItems ?? []).map((item) => ({ id: crypto.randomUUID(), item }));
+  const draft = input.receiptAnalysisId ? getAnalysisDraft(c.env.DB, input.receiptAnalysisId) : null;
+  const payloadHash = receiptHash(JSON.stringify(input));
+  if (input.receiptAnalysisId) {
+    if (!draft || draft.actor_id !== actor.id || draft.invalidated) {
+      return c.json({ error: "Diese Analyse ist nicht mehr verfügbar. Bitte erneut analysieren." }, 409);
+    }
+    if (draft.transaction_id) {
+      if (draft.payload_hash !== payloadHash) return c.json({ error: "Diese Analyse wurde bereits gespeichert." }, 409);
+      return c.json({ transaction: await getTransaction(c.env.DB, draft.transaction_id) });
+    }
+    const baseline = JSON.parse(draft.items_json) as ReceiptItem[];
+    if (!input.receiptItems || baseline.length !== input.receiptItems.length || baseline.some((item, index) => {
+      const next = input.receiptItems![index];
+      return item.name !== next.name || item.normalizedName !== next.normalizedName || item.amountCents !== next.amountCents ||
+        item.category !== next.category || item.quantity !== next.quantity;
+    })) return c.json({ error: "Die Positionen passen nicht zur ursprünglichen Analyse." }, 400);
+    // The learned correction must describe the actual saved financial allocation.
+    for (const roommateId of roommateIds) {
+      const itemTotal = input.receiptItems.reduce((sum, item) => sum + (item.splits.find((s) => s.roommateId === roommateId)?.amountCents ?? 0), 0);
+      if (itemTotal !== (splits.find((s) => s.roommateId === roommateId)?.owedCents ?? 0)) {
+        return c.json({ error: "Positionen und Ausgabenaufteilung stimmen nicht überein." }, 400);
+      }
+    }
+  }
+
 
   await c.env.DB.batch([
     c.env.DB
@@ -395,6 +423,11 @@ app.post("/api/finance/expenses", zValidator("json", expenseSchema), async (c) =
           .bind(crypto.randomUUID(), receiptItemId, split.roommateId, split.amountCents),
       ),
     ]),
+    ...(draft ? [
+      ...(!draft.attachment_hash ? correctionStatements(c.env.DB, draft, id, input.receiptItems as ReceiptItem[]) : []),
+      c.env.DB.prepare(`UPDATE receipt_analysis_drafts SET transaction_id = ?, payload_hash = ?, finalized = ? WHERE id = ?`)
+        .bind(id, payloadHash, draft.attachment_hash ? 0 : 1, draft.id),
+    ] : []),
   ]);
 
   return c.json({ transaction: await getTransaction(c.env.DB, id) }, 201);
@@ -417,8 +450,15 @@ app.put("/api/finance/expenses/:id/receipt-file", async (c) => {
     return c.json({ error: "Die Originalrechnung muss kleiner als 12 MB sein." }, 400);
   }
 
+  const content = new Uint8Array(await receipt.arrayBuffer());
+  const draftId = c.env.DB.prepare("SELECT id FROM receipt_analysis_drafts WHERE transaction_id = ?").bind(id).first<{ id: string }>();
+  const draft = draftId ? getAnalysisDraft(c.env.DB, draftId.id) : null;
+  if (draft?.attachment_hash && receiptHash(content) !== draft.attachment_hash) {
+    return c.json({ error: "Bitte den unveränderten Originalbeleg dieser Analyse hochladen." }, 400);
+  }
+  const saved = await getTransaction(c.env.DB, id);
   const mimeType = isPdf ? "application/pdf" : receipt.type || "application/octet-stream";
-  await c.env.DB
+  await c.env.DB.batch([c.env.DB
     .prepare(
       `INSERT INTO finance_receipt_uploads (
          transaction_id, original_name, mime_type, size_bytes, content, uploaded_at
@@ -435,10 +475,15 @@ app.put("/api/finance/expenses/:id/receipt-file", async (c) => {
       receipt.name.slice(0, 255) || "rechnung",
       mimeType,
       receipt.size,
-      new Uint8Array(await receipt.arrayBuffer()),
+      content,
       new Date().toISOString(),
     )
-    .run();
+    ,
+    ...(draft && !draft.invalidated && !draft.finalized ? [
+      ...correctionStatements(c.env.DB, draft, id, saved.receiptItems ?? []),
+      c.env.DB.prepare("UPDATE receipt_analysis_drafts SET finalized = 1 WHERE id = ?").bind(draft.id),
+    ] : []),
+  ]);
 
   return c.json({ transaction: await getTransaction(c.env.DB, id) });
 });
@@ -458,7 +503,7 @@ app.get("/api/finance/expenses/:id/receipt-file", async (c) => {
   }
 
   const safeName = upload.original_name.replace(/[\r\n"]/g, "_");
-  return new Response(upload.content, {
+  return new Response(new Uint8Array(upload.content), {
     headers: {
       "Content-Type": upload.mime_type,
       "Content-Length": String(upload.size_bytes),
@@ -478,6 +523,7 @@ app.patch("/api/finance/expenses/:id", zValidator("json", expenseSchema), async 
   const receiptItems = input.receiptItems?.map((item) => ({ id: crypto.randomUUID(), item }));
 
   await c.env.DB.batch([
+    ...invalidateReceiptEvidence(c.env.DB, id),
     c.env.DB
       .prepare(
         `UPDATE finance_transactions
@@ -535,10 +581,10 @@ app.patch("/api/finance/expenses/:id", zValidator("json", expenseSchema), async 
 app.delete("/api/finance/expenses/:id", async (c) => {
   const id = c.req.param("id");
   await requireTransaction(c.env.DB, id, "expense");
-  await c.env.DB
+  await c.env.DB.batch([...invalidateReceiptEvidence(c.env.DB, id), c.env.DB
     .prepare("DELETE FROM finance_transactions WHERE id = ? AND household_id = ? AND type = 'expense'")
     .bind(id, household.id)
-    .run();
+  ]);
   return c.json({ ok: true });
 });
 
@@ -576,13 +622,37 @@ app.post("/api/finance/settlements", zValidator("json", settlementSchema), async
 });
 
 app.get("/api/receipt-rules", async (c) => {
-  return c.json({ rules: await listReceiptAssignmentRules(c.env.DB) });
+  const rules = await listReceiptAssignmentRules(c.env.DB);
+  return c.json({ rules, revision: receiptHash(JSON.stringify(rules)) });
 });
 
 app.put("/api/receipt-rules", zValidator("json", receiptAssignmentRulesSchema), async (c) => {
-  const { rules } = c.req.valid("json");
-  await replaceReceiptAssignmentRules(c.env.DB, rules);
-  return c.json({ rules: await listReceiptAssignmentRules(c.env.DB) });
+  const { rules, revision } = c.req.valid("json");
+  const current = listReceiptAssignmentRules(c.env.DB);
+  if (revision !== receiptHash(JSON.stringify(current))) {
+    return c.json({ error: "Die WG-Regeln wurden inzwischen geändert. Bitte den Dialog neu öffnen; deine Änderungen wurden nicht gespeichert." }, 409);
+  }
+  replaceReceiptAssignmentRules(c.env.DB, rules);
+  const saved = listReceiptAssignmentRules(c.env.DB);
+  return c.json({ rules: saved, revision: receiptHash(JSON.stringify(saved)) });
+});
+
+app.get("/api/receipt-learning", (c) => c.json(learningState(c.env.DB)));
+app.patch("/api/receipt-learning", zValidator("json", z.object({ enabled: z.boolean() })), (c) => {
+  c.env.DB.prepare("UPDATE receipt_learning_settings SET enabled = ? WHERE id = 1").bind(c.req.valid("json").enabled ? 1 : 0).run();
+  return c.json(learningState(c.env.DB));
+});
+app.post("/api/receipt-learning/product", zValidator("json", z.object({
+  key: z.string().trim().min(1).max(500), action: z.enum(["reset", "disable", "enable"]),
+})), (c) => {
+  const { key: rawKey, action } = c.req.valid("json");
+  const key = normalizeReceiptIdentity(rawKey);
+  c.env.DB.batch([
+    ...(action === "reset" ? [c.env.DB.prepare("DELETE FROM receipt_corrections WHERE product_key = ?").bind(key)] : []),
+    c.env.DB.prepare(`INSERT INTO receipt_learning_products (product_key, disabled) VALUES (?, ?)
+      ON CONFLICT(product_key) DO UPDATE SET disabled = CASE WHEN ? = 'reset' THEN receipt_learning_products.disabled ELSE excluded.disabled END`).bind(key, action === "disable" ? 1 : 0, action),
+  ]);
+  return c.json(learningState(c.env.DB));
 });
 
 app.post("/api/finance/receipt/analyze", async (c) => {
@@ -607,14 +677,24 @@ app.post("/api/finance/receipt/analyze", async (c) => {
     return c.json({ error: `Die Rechnungsdatei ist zu gross. Bitte unter ${fileIsPdf ? 12 : 4} MB bleiben.` }, 400);
   }
 
-  const prompt = buildReceiptPrompt(await listReceiptAssignmentRules(c.env.DB), receiptText);
+  const rules = await listReceiptAssignmentRules(c.env.DB);
+  const prompt = buildReceiptPrompt(rules, receiptText);
   const response = await c.env.analyzeReceipt({
     prompt,
     document: file,
     outputSchema: receiptJsonSchema(),
   });
   const parsed = parseModelJson(response);
-  return c.json({ analysis: normalizeReceiptAnalysis(parsed, roommateIds) });
+  const analysis = applyReceiptLearning(c.env.DB, normalizeReceiptAnalysis(parsed, roommateIds, rules), rules);
+  const analysisId = crypto.randomUUID();
+  const attachmentHash = file ? receiptHash(new Uint8Array(await file.arrayBuffer())) : null;
+  c.env.DB.prepare("DELETE FROM receipt_analysis_drafts WHERE transaction_id IS NULL AND created_at < ?")
+    .bind(new Date(Date.now() - 7 * 86400000).toISOString()).run();
+  c.env.DB.prepare(`INSERT INTO receipt_analysis_drafts
+    (id, actor_id, items_json, source_key, attachment_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(analysisId, c.get("roommate").id, JSON.stringify(analysis.items),
+      attachmentHash ?? receiptHash(normalizeReceiptIdentity(receiptText)), attachmentHash, new Date().toISOString()).run();
+  return c.json({ analysis, analysisId });
 });
 
 app.get("/api/tasks", async (c) => {
@@ -848,8 +928,8 @@ function buildExpenseSplits(input: z.infer<typeof expenseSchema>): FinanceSplit[
   return splits;
 }
 
-async function listReceiptAssignmentRules(db: LocalDatabase): Promise<ReceiptAssignmentRule[]> {
-  const rows = await db
+function listReceiptAssignmentRules(db: LocalDatabase): ReceiptAssignmentRule[] {
+  const rows = db
     .prepare(
       `SELECT id, target, match, shares, extra_description
        FROM receipt_assignment_rules
@@ -868,10 +948,10 @@ async function listReceiptAssignmentRules(db: LocalDatabase): Promise<ReceiptAss
   }));
 }
 
-async function replaceReceiptAssignmentRules(
+function replaceReceiptAssignmentRules(
   db: LocalDatabase,
   rules: ReceiptAssignmentRule[],
-): Promise<void> {
+): void {
   const now = new Date().toISOString();
   db.batch([
     db.prepare("DELETE FROM receipt_assignment_rules WHERE household_id = ?").bind(household.id),
@@ -1265,6 +1345,7 @@ Rules:
 - The sum of all item amounts must equal the receipt grand total.
 - Match rule names case-insensitively and semantically against receipt item names.
 - A matching rule with target "item" takes precedence over a rule with target "category".
+- Set "assignmentRuleId" to the matching household rule id, or null if no rule matches. This includes semantic matches.
 - The values in "shares" are percentage allocations keyed by roommate ID.
 - Use "extraDescription" to interpret quantities or ambiguous receipt lines.
 - If no rule matches, split the item equally across all roommates.
@@ -1291,8 +1372,9 @@ function receiptJsonSchema(): Record<string, unknown> {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["name", "normalizedName", "category", "quantity", "amountCents", "assignmentReason", "splits"],
+          required: ["name", "normalizedName", "category", "quantity", "amountCents", "assignmentReason", "assignmentRuleId", "splits"],
           properties: {
+            assignmentRuleId: { type: ["string", "null"] },
             name: { type: "string" },
             normalizedName: { type: "string" },
             category: { type: "string", enum: receiptTrackingCategories },

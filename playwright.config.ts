@@ -50,6 +50,16 @@ export default defineConfig({
     url: `http://127.0.0.1:${process.env.E2E_PWA_PORT ?? e2ePort + 1}/__test/health`,
     reuseExistingServer: false,
     timeout: 30_000,
+  }, {
+    command: "bun e2e/learning-server.ts",
+    env: {
+      FLAT_E2E_LEARNING: "synthetic-only",
+      E2E_LEARNING_PORT: String(process.env.E2E_LEARNING_PORT ?? e2ePort + 2),
+      E2E_LEARNING_DATABASE_PATH: join(tmpdir(), `flat-e2e-learning-${process.pid}-${Date.now()}.sqlite`),
+    },
+    url: `http://127.0.0.1:${process.env.E2E_LEARNING_PORT ?? e2ePort + 2}/healthz`,
+    reuseExistingServer: false,
+    timeout: 30_000,
   }],
   projects: [
     {

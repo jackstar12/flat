@@ -173,3 +173,15 @@ export type TasksPayload = {
   chores: Chore[];
   rotations: Rotation[];
 };
+
+export type ReceiptLearningPayload = {
+  enabled: boolean;
+  products: {
+    key: string;
+    name: string;
+    disabled: boolean;
+    evidenceCount: number;
+    status: "pending" | "active" | "conflict";
+    weights: number[] | null;
+  }[];
+};

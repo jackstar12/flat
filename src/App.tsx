@@ -21,8 +21,10 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { FormEvent, ReactNode, useEffect, useId, useRef, useState } from "react";
 import { roommates, roommateIds, findRoommate, household } from "./shared/config";
+import { normalizeReceiptIdentity } from "./shared/receipt-learning";
 import { aggregateReceiptSplits } from "./shared/receipt";
 import { resolveExpensePayer } from "./shared/expense-payer";
 import { currentAssigneeId, dateStatus, defaultChoreWeekday } from "./shared/tasks";
@@ -35,6 +37,7 @@ import type {
   Rotation,
   ReceiptAnalysis,
   ReceiptAssignmentRule,
+  ReceiptLearningPayload,
   Roommate,
   SessionPayload,
   TasksPayload,
@@ -184,41 +187,25 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-cloud text-ink">
-      {authExpired && <div role="alert" className="fixed inset-x-0 top-0 z-30 border-b border-line bg-white p-4 shadow-soft">
+      {authExpired && <div role="alert" className="global-auth-alert fixed inset-x-0 top-0 z-30 border-b border-line bg-white p-4 shadow-soft">
         Anmeldung abgelaufen. Die Anfrage wird nicht automatisch wiederholt. Bitte nach der Anmeldung den Speicherstand prüfen.
         <a className="primary-button ml-4" href="/">Erneut anmelden</a>
       </div>}
-      <header className="border-b border-line bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-normal">Hugo Wolfgang</h1>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <nav className="grid grid-cols-2 rounded-md border border-line bg-cloud p-1">
-              <NavButton
-                active={activeView === "finanzen"}
-                icon={<Banknote size={18} />}
-                label="Finanzen"
-                onClick={() => setActiveView("finanzen")}
-              />
-              <NavButton
-                active={activeView === "aufgaben"}
-                icon={<ClipboardList size={18} />}
-                label="Aufgaben"
-                onClick={() => setActiveView("aufgaben")}
-              />
-            </nav>
-            <div className="flex items-center justify-between gap-3">
-              <PersonBadge roommate={session.roommate} />
-              <button className="icon-button" type="button" title="Abmelden" onClick={() => void logout()}>
-                <LogOut size={18} />
-              </button>
-            </div>
+      <header className="border-b border-line bg-white/90">
+        <div className="app-shell mx-auto max-w-7xl px-4 sm:px-6">
+          <h1 className="text-lg font-semibold sm:text-2xl">Hugo Wolfgang</h1>
+          <nav aria-label="Hauptnavigation" className="app-navigation grid grid-cols-2 rounded-md border border-line bg-cloud p-1">
+            <NavButton active={activeView === "finanzen"} icon={<Banknote size={18} />} label="Finanzen" onClick={() => setActiveView("finanzen")} />
+            <NavButton active={activeView === "aufgaben"} icon={<ClipboardList size={18} />} label="Aufgaben" onClick={() => setActiveView("aufgaben")} />
+          </nav>
+          <div className="app-identity flex items-center justify-end gap-2">
+            <PersonBadge roommate={session.roommate} />
+            <button className="icon-button shrink-0" type="button" title="Abmelden" onClick={() => void logout()}><LogOut size={18} /></button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+      <main className="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6">
         {error ? (
           <div className="mb-4 flex items-center justify-between rounded-md border border-coral/30 bg-coral/10 px-4 py-3 text-sm text-ink">
             <span>{error}</span>
@@ -262,6 +249,9 @@ function FinanceView({
   const [editingExpense, setEditingExpense] = useState<FinanceTransaction | null>(null);
   const [settlementForm, setSettlementForm] = useState(defaultSettlementForm);
   const [settlementOpen, setSettlementOpen] = useState(false);
+  const [settlementPending, setSettlementPending] = useState(false);
+  const [settlementError, setSettlementError] = useState("");
+  const settlementBusy = useRef(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const sortedBalances = data?.balances ?? [];
   const transactions = data?.transactions ?? [];
@@ -299,7 +289,7 @@ function FinanceView({
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="balance-strip grid grid-cols-3 gap-2 sm:gap-3">
           {sortedBalances.map((balance) => (
             <BalanceCard key={balance.roommateId} roommateId={balance.roommateId} cents={balance.balanceCents} />
           ))}
@@ -309,7 +299,7 @@ function FinanceView({
           <div className="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
             <div className="flex items-center gap-2">
               <Receipt size={18} className="text-moss" />
-              <h3 className="font-semibold">Ledger</h3>
+              <h3 className="font-semibold">Buchungen</h3>
             </div>
             <div className="min-w-0 text-right" data-testid="total-spent">
               <span className="block text-[10px] font-medium uppercase tracking-[0.08em] text-ink/45">
@@ -348,13 +338,13 @@ function FinanceView({
         <ProductTrackingCard transactions={transactions} />
 
         <div className="rounded-md border border-line bg-white p-4">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Coins size={18} className="text-moss" />
               <h3 className="font-semibold">Ausgleichen</h3>
             </div>
             <button className="secondary-button px-3 py-2 text-sm" type="button" onClick={() => setSettlementOpen(true)}>
-              Manuell
+              Ausgleich buchen
             </button>
           </div>
           <div className="space-y-3">
@@ -395,22 +385,26 @@ function FinanceView({
         </div>
 
         {settlementOpen ? (
-          <div className="rounded-md border border-line bg-white p-4">
-            <FormHeader title="Ausgleichszahlung" onClose={() => setSettlementOpen(false)} />
+          <FormDialog title="Ausgleichszahlung" pending={settlementPending} error={settlementError} onClose={() => setSettlementOpen(false)}>
             <form
-              className="space-y-3"
+              className="dialog-form"
               onSubmit={async (event) => {
                 event.preventDefault();
+                if (settlementBusy.current) return;
+                settlementBusy.current = true;
+                setSettlementPending(true);
+                setSettlementError("");
                 try {
                   await submitSettlement(settlementForm);
                   setSettlementForm(defaultSettlementForm());
                   setSettlementOpen(false);
                   onChanged();
                 } catch (unknownError) {
-                  onError(readError(unknownError));
-                }
+                  setSettlementError(readError(unknownError));
+                } finally { settlementBusy.current = false; setSettlementPending(false); }
               }}
             >
+              <fieldset disabled={settlementPending} className="dialog-fields space-y-3">
               <RoommateSelect
                 label="Von"
                 value={settlementForm.fromRoommateId}
@@ -431,11 +425,14 @@ function FinanceView({
                 value={settlementForm.paidAt}
                 onChange={(value) => setSettlementForm((current) => ({ ...current, paidAt: value }))}
               />
-              <button className="primary-button w-full" type="submit">
+              </fieldset>
+              <div className="dialog-actions">
+              <button className="primary-button w-full" type="submit" disabled={settlementPending}>
                 Zahlung buchen
               </button>
+              </div>
             </form>
-          </div>
+          </FormDialog>
         ) : null}
       </aside>
 
@@ -483,6 +480,13 @@ function ReceiptImportPanel({
   const paidBy = resolveExpensePayer(form.paidBy, authenticatedRoommateId);
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<ReceiptAnalysis | null>(null);
+  const [analysisId, setAnalysisId] = useState<string>();
+  const [createdExpenseId, setCreatedExpenseId] = useState<string>();
+  const createdExpense = useRef<string | undefined>(undefined);
+  const saveAttempt = useRef<{ form: ReceiptImportForm; analysis: ReceiptAnalysis; file: File | null; analysisId?: string } | null>(null);
+  const [saveLocked, setSaveLocked] = useState(false);
+  const rulesDetails = useRef<HTMLDetailsElement>(null);
+  const [rulesRevision, setRulesRevision] = useState<string>();
   const [pending, setPending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -530,6 +534,7 @@ function ReceiptImportPanel({
   function invalidateSource() {
     sourceVersion.current += 1;
     setAnalysis(null);
+    setAnalysisId(undefined);
     setError("");
   }
 
@@ -548,8 +553,8 @@ function ReceiptImportPanel({
   const [rulesDirty, setRulesDirty] = useState(false);
 
   useEffect(() => {
-    void api<{ rules: ReceiptAssignmentRule[] }>("/api/receipt-rules")
-      .then((payload) => setRules(payload.rules))
+    void api<{ rules: ReceiptAssignmentRule[]; revision: string }>("/api/receipt-rules")
+      .then((payload) => { setRules(payload.rules); setRulesRevision(payload.revision); })
       .catch(reportError)
       .finally(() => setRulesLoading(false));
   }, [onError]);
@@ -559,11 +564,12 @@ function ReceiptImportPanel({
     rulesBusy.current = true;
     setRulesSaving(true);
     try {
-      const payload = await api<{ rules: ReceiptAssignmentRule[] }>("/api/receipt-rules", {
+      const payload = await api<{ rules: ReceiptAssignmentRule[]; revision: string }>("/api/receipt-rules", {
         method: "PUT",
-        body: JSON.stringify({ rules }),
+        body: JSON.stringify({ rules, revision: rulesRevision }),
       });
       setRules(payload.rules);
+      setRulesRevision(payload.revision);
       setRulesDirty(false);
     } finally {
       rulesBusy.current = false;
@@ -579,17 +585,15 @@ function ReceiptImportPanel({
     setError("");
     setPending(true);
     try {
-      if (rulesDirty) {
-        await saveRules();
-      }
       const formData = new FormData();
       formData.set("receiptText", form.receiptText);
       if (file) {
         formData.set("receipt", file);
       }
-      const response = await apiForm<{ analysis: ReceiptAnalysis }>("/api/finance/receipt/analyze", formData);
+      const response = await apiForm<{ analysis: ReceiptAnalysis; analysisId?: string }>("/api/finance/receipt/analyze", formData);
       if (sourceVersion.current === version) {
         setAnalysis(response.analysis);
+        setAnalysisId(response.analysisId);
         setStep("review");
       }
     } catch (unknownError) {
@@ -612,9 +616,18 @@ function ReceiptImportPanel({
     setSaving(true);
     setError("");
     try {
-      await createExpenseFromReceipt({ ...form, paidBy }, analysis, file);
+      saveAttempt.current ??= { form: { ...form, paidBy }, analysis, file, analysisId };
+      setSaveLocked(true);
+      const attempt = saveAttempt.current;
+      await createExpenseFromReceipt(attempt.form, attempt.analysis, attempt.file, attempt.analysisId, createdExpense.current, (id) => { createdExpense.current = id; setCreatedExpenseId(id); });
       onSaved();
     } catch (unknownError) {
+      // A rejected POST is safe to edit; an uncertain response keeps the exact
+      // payload for idempotent retry. After POST succeeds, only retry its file.
+      if (!createdExpense.current && unknownError instanceof ApiError && unknownError.status >= 400 && unknownError.status < 500) {
+        saveAttempt.current = null;
+        setSaveLocked(false);
+      }
       reportError(unknownError);
     } finally {
       busy.current = false;
@@ -644,28 +657,29 @@ function ReceiptImportPanel({
         <header className="receipt-header">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-moss">Gemeinsam abrechnen</p>
-              <h2 id="receipt-title" className="mt-1 text-xl font-semibold">Rechnung analysieren</h2>
+              <p className="hidden text-xs font-semibold uppercase tracking-widest text-moss sm:block">Gemeinsam abrechnen</p>
+              <h2 id="receipt-title" className="text-base font-semibold sm:mt-1 sm:text-xl">Rechnung analysieren</h2>
             </div>
             <button className="icon-button shrink-0" type="button" aria-label="Schliessen"
               disabled={pending || saving || rulesSaving} onClick={onClose}><X size={20} /></button>
           </div>
-          <nav aria-label="Rechnungsschritte" className="mt-4 grid grid-cols-2 gap-2">
+          <nav aria-label="Rechnungsschritte" className="mt-1 grid grid-cols-2 gap-2 sm:mt-3">
             <button type="button" className={`receipt-step ${step === "upload" ? "receipt-step-active" : ""}`}
-              aria-current={step === "upload" ? "step" : undefined} disabled={pending || saving}
-              onClick={() => setStep("upload")}>1 · Beleg wählen</button>
+              aria-current={step === "upload" ? "step" : undefined} disabled={pending || saving || saveLocked}
+              aria-label="1 · Beleg wählen" onClick={() => setStep("upload")}>1 · Beleg</button>
             <button type="button" className={`receipt-step ${step === "review" ? "receipt-step-active" : ""}`}
-              aria-current={step === "review" ? "step" : undefined} disabled={!analysis || pending || saving}
-              onClick={() => setStep("review")}>2 · Prüfen & teilen</button>
+              aria-current={step === "review" ? "step" : undefined} disabled={!analysis || pending || saving || saveLocked}
+              aria-label="2 · Prüfen & teilen" onClick={() => setStep("review")}>2 · Aufteilen</button>
           </nav>
         </header>
         <div ref={scrollSurface} className="receipt-scroll">
+          {saveLocked ? <p className="mb-3 rounded-md bg-lemon/30 p-3 text-sm">{createdExpenseId ? "Ausgabe gebucht. Nur der Originalbeleg wird noch hochgeladen; beim Wiederholen entsteht keine zweite Ausgabe." : "Speicherversuch begonnen. Bitte mit denselben Angaben wiederholen oder den gespeicherten Stand prüfen."}</p> : null}
           {error ? <div role="alert" className="mb-4 rounded-md bg-coral/10 p-3 text-sm">{error}
             {authExpired ? <a className="secondary-button mt-3" href="/">Erneut anmelden</a> : null}
           </div> : null}
           <form id="receipt-form" className="space-y-4" hidden={step !== "upload"}
             onSubmit={(event) => void analyze(event)}>
-            <fieldset disabled={pending || saving || rulesSaving} className="min-w-0 space-y-4">
+            <fieldset disabled={pending || saving || rulesSaving || saveLocked} className="min-w-0 space-y-4">
               <div className="rounded-md border border-dashed border-moss/40 bg-cloud p-4">
                 <Receipt size={28} className="mb-3 text-moss" />
                 <h3 className="font-semibold">Ein Beleg. Fair aufgeteilt.</h3>
@@ -692,15 +706,25 @@ function ReceiptImportPanel({
                     placeholder="OCR-Text oder abgetippte Positionen" />
                 </label>
               </details>
-              <details className="receipt-disclosure">
+              <details ref={rulesDetails} className="receipt-disclosure">
                 <summary>Zuordnungsregeln <span className="font-normal text-ink/55">· optional</span></summary>
                 <ReceiptRulesEditor rules={rules} loading={rulesLoading} saving={rulesSaving} dirty={rulesDirty}
                   onChange={(nextRules) => { invalidateSource(); setRules(nextRules); setRulesDirty(true); }}
                   onSave={() => void saveRules().catch(reportError)} onError={setError} />
+                {rulesDirty ? <p className="p-3 text-sm text-ink/65">Ungespeicherte Regeländerungen gelten erst nach „Speichern“. Die Analyse nutzt die gespeicherten WG-Regeln.</p> : null}
               </details>
             </fieldset>
           </form>
-          <fieldset disabled={saving} className="mb-5 mt-4 min-w-0 space-y-3 rounded-md border border-line p-3">
+          <details className="receipt-disclosure mt-3">
+            <summary>Vorschläge & Lernen <span className="font-normal text-ink/55">· für die WG</span></summary>
+            <div className="space-y-3 p-3 pt-0">
+              <p className="text-sm text-ink/65">Nur korrigierte, gespeicherte Belege zählen. Ab zwei übereinstimmenden Belegen schlagen wir die Aufteilung wieder vor. Widersprüche pausieren den Vorschlag. WG-Regeln haben Vorrang.</p>
+              <button type="button" className="secondary-button w-full" disabled={saveLocked || pending || saving}
+                onClick={() => { setStep("upload"); if (rulesDetails.current) { rulesDetails.current.open = true; requestAnimationFrame(() => rulesDetails.current?.querySelector("summary")?.focus()); } }}>WG-Regeln verwalten</button>
+              <ReceiptLearningControls />
+            </div>
+          </details>
+          <fieldset disabled={saving || saveLocked} className="mb-5 mt-4 min-w-0 space-y-3 rounded-md border border-line p-3">
             <legend className="px-1 text-sm font-semibold text-moss">Zur Ausgabe</legend>
             <div className="grid gap-3 sm:grid-cols-2">
               <RoommateSelect
@@ -732,7 +756,7 @@ function ReceiptImportPanel({
               {analysis ? <span className="text-sm font-semibold">{formatMoney(analysis.totalCents)}</span> : null}
             </div>
             {analysis ? (
-              <fieldset disabled={saving} className="min-w-0 space-y-4 p-3 sm:p-4">
+              <fieldset disabled={saving || saveLocked} className="min-w-0 space-y-4 p-3 sm:p-4">
                 {analysis.warnings.length ? (
                   <div className="rounded-md bg-lemon/30 px-3 py-2 text-sm text-ink">
                     {analysis.warnings.join(" ")}
@@ -762,11 +786,6 @@ function ReceiptImportPanel({
                           </div>
                           <span className="shrink-0 font-semibold">{formatMoney(item.amountCents)}</span>
                         </div>
-                        <p className="mt-2 text-xs text-ink/65">
-                          {item.splits
-                            .map((split) => `${nameFor(split.roommateId)} ${formatMoney(split.amountCents)}`)
-                            .join(" · ")}
-                        </p>
                         <div className="mt-3 grid grid-cols-3 gap-2">
                           {roommateIds.map((roommateId) => (
                             <label key={roommateId} className="block">
@@ -826,12 +845,12 @@ function ReceiptImportPanel({
         <footer className="receipt-footer">
           <p role="status" className="mb-2 text-xs text-ink/65">
             {pending ? "Die Rechnung wird gelesen. Bitte kurz warten …" : saving ? "Ausgabe und Originalbeleg werden gespeichert …" :
-              step === "review" ? "Bitte Beträge und Aufteilung vor dem Speichern prüfen." :
+              step === "review" ? "Aufteilung geprüft?" :
               analysis ? "Vorschlag vorhanden. Änderungen am Beleg erfordern eine neue Analyse." : "Dein Originalbeleg bleibt unverändert."}
           </p>
           {step === "review" ? <button className="primary-button w-full" type="button"
             disabled={saving || pending || !paidBy || !analysis || analysis.totalCents <= 0 || !receiptAnalysisIsValid(analysis)}
-            onClick={() => void saveExpense()}>{saving ? "Speichert..." : "Als Ausgabe speichern"}</button> :
+            onClick={() => void saveExpense()}>{saving ? "Speichert..." : createdExpenseId ? "Originalbeleg erneut hochladen" : "Als Ausgabe speichern"}</button> :
             <button className="primary-button w-full" type="submit" form="receipt-form"
               disabled={pending || saving || rulesSaving || (!file && !form.receiptText.trim())}>
               <Sparkles size={18} />{pending ? "Analysiere..." : "Analysieren"}
@@ -840,6 +859,84 @@ function ReceiptImportPanel({
       </dialog>
     </div>
   );
+}
+
+function ReceiptLearningControls() {
+  const [state, setState] = useState<ReceiptLearningPayload | null>(null);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const busy = useRef(false);
+  useEffect(() => {
+    void api<ReceiptLearningPayload>("/api/receipt-learning").then(setState).catch((e) => setError(readError(e)));
+  }, []);
+  async function change(path: string, method: string, body: unknown) {
+    if (busy.current) return;
+    busy.current = true;
+    setPending(true);
+    setError("");
+    try { setState(await api<ReceiptLearningPayload>(path, { method, body: JSON.stringify(body) })); }
+    catch (e) { setError(readError(e)); }
+    finally { busy.current = false; setPending(false); }
+  }
+  return <section aria-label="Gelernte Aufteilungen" className="space-y-3">
+    {error ? <p role="alert" className="text-sm text-coral">{error}{error.includes("Anmeldung") ? <a className="secondary-button mt-2" href="/">Erneut anmelden</a> : null}</p> : null}
+    {!state ? <p className="text-sm text-ink/65">{error ? "Lernstand konnte nicht geladen werden." : "Lernstand wird geladen …"}</p> : <>
+      <label className="flex min-h-11 items-center gap-3 text-sm font-semibold">
+        <input type="checkbox" className="rounded border-line text-moss" checked={state.enabled} disabled={pending}
+          onChange={(event) => void change("/api/receipt-learning", "PATCH", { enabled: event.target.checked })} />
+        Aus gespeicherten Korrekturen lernen
+      </label>
+      {!state.enabled ? <p className="text-sm text-ink/65">Pausiert für die ganze WG: keine neuen Korrekturen merken oder Vorschläge anwenden. Bisherige Einträge bleiben erhalten.</p> : null}
+      {state.products.length === 0 ? <p className="text-sm text-ink/65">Noch keine gespeicherten Korrekturen.</p> : null}
+      {state.products.map((product) => <article key={product.key} className="rounded-md border border-line bg-cloud p-3">
+        <h4 className="break-words font-semibold">{product.name}</h4>
+        <p className="mt-1 text-sm text-ink/65">{product.disabled ? "Für dieses Produkt pausiert" : product.status === "active" ? "Übereinstimmende Korrekturen" : product.status === "conflict" ? "Widersprüchliche Korrekturen · kein Vorschlag" : "Noch kein gefestigter Vorschlag"} · {product.evidenceCount} Belege (letzte 3)</p>
+        {product.weights ? <p className="mt-1 text-sm">{roommates.map((r, i) => `${r.name} ${new Intl.NumberFormat("de", { maximumFractionDigits: 1 }).format(100 * product.weights![i] / product.weights!.reduce((sum, n) => sum + n, 0))} %`).join(" · ")}</p> : null}
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button className="secondary-button px-3 text-sm" type="button" disabled={pending}
+            onClick={() => void change("/api/receipt-learning/product", "POST", { key: product.key, action: product.disabled ? "enable" : "disable" })}>{product.disabled ? "Aktivieren" : "Pausieren"}</button>
+          <button className="secondary-button px-3 text-sm" type="button" disabled={pending || product.evidenceCount === 0}
+            onClick={() => void change("/api/receipt-learning/product", "POST", { key: product.key, action: "reset" })}>Lernstand zurücksetzen</button>
+        </div>
+      </article>)}
+      <p className="text-xs text-ink/60">Zurücksetzen entfernt die bisherigen Hinweise für die ganze WG. Nur künftig gespeicherte Korrekturen können einen neuen Vorschlag bilden. Kein Modelltraining.</p>
+    </>}
+  </section>;
+}
+
+function FormDialog({ title, onClose, pending = false, error, children }: {
+  title: string; onClose: () => void; pending?: boolean; error?: string; children: ReactNode;
+}) {
+  const id = useId();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const modal = dialog.current;
+    const overflow = document.body.style.overflow;
+    const expiry = () => setExpired(true);
+    window.addEventListener("flat-auth-expired", expiry);
+    document.body.style.overflow = "hidden";
+    modal?.showModal();
+    modal?.focus();
+    return () => { window.removeEventListener("flat-auth-expired", expiry); document.body.style.overflow = overflow; modal?.close(); previous?.focus(); };
+  }, []);
+  return createPortal(<dialog ref={dialog} tabIndex={-1} aria-labelledby={id} className="form-dialog"
+    onCancel={(event) => { event.preventDefault(); if (!pending) onClose(); }}
+    onKeyDown={(event) => {
+      if (event.key !== "Tab") return;
+      const controls = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:enabled, input:enabled, select:enabled, textarea:enabled, a[href]') ?? []).filter((el) => el.checkVisibility());
+      if (event.shiftKey && (document.activeElement === controls[0] || document.activeElement === dialog.current)) { event.preventDefault(); controls.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
+    }}>
+    <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line p-3 sm:px-5">
+      <h2 id={id} className="text-lg font-semibold">{title}</h2>
+      <button type="button" className="icon-button shrink-0" aria-label="Schliessen" disabled={pending} onClick={onClose}><X size={18} /></button>
+    </header>
+    {error ? <div role="alert" className="shrink-0 border-b border-line bg-coral/10 px-4 py-2 text-sm">{expired ? "Anmeldung abgelaufen. Die Anfrage wird nicht automatisch wiederholt. Bitte nach der Anmeldung den Speicherstand prüfen." : error}</div> : null}
+    {expired ? <a className="secondary-button mx-4 my-2" href="/">Erneut anmelden</a> : null}
+    {children}
+  </dialog>, document.body);
 }
 
 function ReceiptRulesEditor({
@@ -876,7 +973,7 @@ function ReceiptRulesEditor({
       (rule) =>
         rule.id !== draft.id &&
         rule.target === draft.target &&
-        rule.match.trim().toLocaleLowerCase("de") === draft.match.trim().toLocaleLowerCase("de"),
+        normalizeReceiptIdentity(rule.match) === normalizeReceiptIdentity(draft.match),
     );
     if (duplicate) {
       onError("Diese Regel existiert bereits.");
@@ -1039,7 +1136,6 @@ function ExpensePanel({
   authenticatedRoommateId,
   onClose,
   onSaved,
-  onError,
 }: {
   transaction: FinanceTransaction | null;
   authenticatedRoommateId?: string;
@@ -1052,23 +1148,30 @@ function ExpensePanel({
   );
   const paidBy = resolveExpensePayer(form.paidBy, authenticatedRoommateId);
 
+  const [pending, setPending] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const submitting = useRef(false);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
+    setPending(true);
+    setLocalError("");
     try {
       await submitExpense({ ...form, paidBy }, transaction?.id);
       onSaved();
     } catch (unknownError) {
-      onError(readError(unknownError));
-    }
+      setLocalError(readError(unknownError));
+    } finally { submitting.current = false; setPending(false); }
   }
 
   const amountCents = centsFromEuroInput(form.amount);
 
   return (
-    <div className="fixed inset-0 z-20 grid bg-ink/40 p-3 sm:place-items-center">
-      <section className="max-h-[calc(100vh-1.5rem)] w-full overflow-y-auto rounded-md border border-line bg-white p-4 shadow-soft sm:max-w-xl sm:p-5">
-        <FormHeader title={transaction ? "Ausgabe bearbeiten" : "Neue Ausgabe"} onClose={onClose} />
-        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+    <FormDialog title={transaction ? "Ausgabe bearbeiten" : "Neue Ausgabe"} onClose={onClose} pending={pending} error={localError}>
+        <form className="dialog-form" onSubmit={(event) => void submit(event)}>
+          <fieldset disabled={pending} className="dialog-fields space-y-4">
           <label className="block">
             <span className="label">Beschreibung</span>
             <input
@@ -1140,17 +1243,17 @@ function ExpensePanel({
             </div>
           )}
 
-          <div className="flex justify-end gap-2 border-t border-line pt-4">
-            <button className="secondary-button" type="button" onClick={onClose}>
+          </fieldset>
+          <div className="dialog-actions">
+            <button className="secondary-button" type="button" disabled={pending} onClick={onClose}>
               Abbrechen
             </button>
-            <button className="primary-button" type="submit">
+            <button className="primary-button" type="submit" disabled={pending}>
               Speichern
             </button>
           </div>
         </form>
-      </section>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -1347,10 +1450,10 @@ function RotationCard({
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
-        <div className="relative mx-auto grid h-24 w-24 shrink-0 place-items-center rounded-full border border-moss/25 bg-cloud sm:mx-0">
-          <span className="absolute inset-2 rounded-full border border-dashed border-moss/35" />
-          <span className="relative grid h-14 w-14 place-items-center rounded-full bg-moss text-sm font-semibold text-white shadow-soft">
+      <div className="flex items-center gap-3 p-4 sm:gap-4">
+        <div className="relative grid h-12 w-12 shrink-0 place-items-center rounded-full border border-moss/25 bg-cloud sm:h-24 sm:w-24">
+          <span className="absolute inset-2 hidden rounded-full border border-dashed border-moss/35 sm:block" />
+          <span className="relative grid h-10 w-10 sm:h-14 sm:w-14 place-items-center rounded-full bg-moss text-sm font-semibold text-white shadow-soft">
             {assignee?.initials ?? "?"}
           </span>
           <Repeat className="absolute -bottom-1 -right-1 rounded-full border border-line bg-white p-1.5 text-moss" size={28} />
@@ -1384,7 +1487,6 @@ function RotationPanel({
   rotation,
   onClose,
   onSaved,
-  onError,
 }: {
   rotation: Rotation | null;
   onClose: () => void;
@@ -1397,8 +1499,16 @@ function RotationPanel({
       : defaultRotationForm(),
   );
 
+  const [pending, setPending] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const submitting = useRef(false);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
+    setPending(true);
+    setLocalError("");
     try {
       await api(rotation ? `/api/tasks/rotations/${rotation.id}` : "/api/tasks/rotations", {
         method: rotation ? "PATCH" : "POST",
@@ -1406,15 +1516,14 @@ function RotationPanel({
       });
       onSaved();
     } catch (unknownError) {
-      onError(readError(unknownError));
-    }
+      setLocalError(readError(unknownError));
+    } finally { submitting.current = false; setPending(false); }
   }
 
   return (
-    <div className="fixed inset-0 z-20 grid bg-ink/40 p-3 sm:place-items-center">
-      <section className="w-full rounded-md border border-line bg-white p-4 shadow-soft sm:max-w-lg sm:p-5">
-        <FormHeader title={rotation ? "Rad bearbeiten" : "Neues Rad"} onClose={onClose} />
-        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+    <FormDialog title={rotation ? "Rad bearbeiten" : "Neues Rad"} onClose={onClose} pending={pending} error={localError}>
+        <form className="dialog-form" onSubmit={(event) => void submit(event)}>
+          <fieldset disabled={pending} className="dialog-fields space-y-4">
           <label className="block">
             <span className="label">Name</span>
             <input
@@ -1436,13 +1545,13 @@ function RotationPanel({
             selected={form.participantIds}
             onChange={(participantIds) => setForm((current) => ({ ...current, participantIds }))}
           />
-          <div className="flex justify-end gap-2 border-t border-line pt-4">
-            <button className="secondary-button" type="button" onClick={onClose}>Abbrechen</button>
-            <button className="primary-button" type="submit">Speichern</button>
+          </fieldset>
+          <div className="dialog-actions">
+            <button className="secondary-button" type="button" disabled={pending} onClick={onClose}>Abbrechen</button>
+            <button className="primary-button" type="submit" disabled={pending}>Speichern</button>
           </div>
         </form>
-      </section>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -1450,7 +1559,6 @@ function ChorePanel({
   chore,
   onClose,
   onSaved,
-  onError,
 }: {
   chore: Chore | null;
   onClose: () => void;
@@ -1459,21 +1567,28 @@ function ChorePanel({
 }) {
   const [form, setForm] = useState<ChoreForm>(() => (chore ? choreFormFromChore(chore) : defaultChoreForm()));
 
+  const [pending, setPending] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const submitting = useRef(false);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
+    setPending(true);
+    setLocalError("");
     try {
       await submitChore(form, chore?.id);
       onSaved();
     } catch (unknownError) {
-      onError(readError(unknownError));
-    }
+      setLocalError(readError(unknownError));
+    } finally { submitting.current = false; setPending(false); }
   }
 
   return (
-    <div className="fixed inset-0 z-20 grid bg-ink/40 p-3 sm:place-items-center">
-      <section className="max-h-[calc(100vh-1.5rem)] w-full overflow-y-auto rounded-md border border-line bg-white p-4 shadow-soft sm:max-w-xl sm:p-5">
-        <FormHeader title={chore ? "Aufgabe bearbeiten" : "Neue Aufgabe"} onClose={onClose} />
-        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+    <FormDialog title={chore ? "Aufgabe bearbeiten" : "Neue Aufgabe"} onClose={onClose} pending={pending} error={localError}>
+        <form className="dialog-form" onSubmit={(event) => void submit(event)}>
+          <fieldset disabled={pending} className="dialog-fields space-y-4">
           <label className="block">
             <span className="label">Titel</span>
             <input
@@ -1543,17 +1658,17 @@ function ChorePanel({
             />
             Aktiv
           </label>
-          <div className="flex justify-end gap-2 border-t border-line pt-4">
-            <button className="secondary-button" type="button" onClick={onClose}>
+          </fieldset>
+          <div className="dialog-actions">
+            <button className="secondary-button" type="button" disabled={pending} onClick={onClose}>
               Abbrechen
             </button>
-            <button className="primary-button" type="submit">
+            <button className="primary-button" type="submit" disabled={pending}>
               Speichern
             </button>
           </div>
         </form>
-      </section>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -1970,17 +2085,6 @@ function DateInput({ label, value, onChange }: { label: string; value: string; o
   );
 }
 
-function FormHeader({ title, onClose }: { title: string; onClose: () => void }) {
-  return (
-    <div className="mb-4 flex items-center justify-between gap-3">
-      <h3 className="text-lg font-semibold">{title}</h3>
-      <button className="icon-button" type="button" title="Schliessen" onClick={onClose}>
-        <X size={18} />
-      </button>
-    </div>
-  );
-}
-
 function NavButton({
   active,
   icon,
@@ -2026,6 +2130,10 @@ function LoadingScreen() {
   );
 }
 
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "include",
@@ -2039,7 +2147,7 @@ async function api<T = unknown>(path: string, options: RequestInit = {}): Promis
 
   if (response.status === 401 || response.type === "opaqueredirect") {
     window.dispatchEvent(new Event("flat-auth-expired"));
-    throw new Error("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.");
+    throw new ApiError("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.", response.status);
   }
   if (!response.ok) {
     let message = "Anfrage fehlgeschlagen.";
@@ -2049,7 +2157,7 @@ async function api<T = unknown>(path: string, options: RequestInit = {}): Promis
     } catch {
       message = response.statusText || message;
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return (await response.json()) as T;
@@ -2065,7 +2173,7 @@ async function apiForm<T = unknown>(path: string, body: FormData, method = "POST
 
   if (response.status === 401 || response.type === "opaqueredirect") {
     window.dispatchEvent(new Event("flat-auth-expired"));
-    throw new Error("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.");
+    throw new ApiError("Anmeldung abgelaufen. Bitte erneut anmelden; nichts wird automatisch wiederholt.", response.status);
   }
   if (!response.ok) {
     let message = "Anfrage fehlgeschlagen.";
@@ -2075,7 +2183,7 @@ async function apiForm<T = unknown>(path: string, body: FormData, method = "POST
     } catch {
       message = response.statusText || message;
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return (await response.json()) as T;
@@ -2118,6 +2226,9 @@ async function createExpenseFromReceipt(
   form: ReceiptImportForm,
   analysis: ReceiptAnalysis,
   originalFile: File | null,
+  analysisId?: string,
+  existingId?: string,
+  onCreated?: (id: string) => void,
 ): Promise<void> {
   if (!form.paidBy) {
     throw new Error("Bitte eine zahlende Person auswählen.");
@@ -2129,6 +2240,8 @@ async function createExpenseFromReceipt(
     throw new Error("Die Positionsaufteilungen passen nicht zur Rechnung.");
   }
 
+  let transactionId = existingId;
+  if (!transactionId) {
   const { transaction } = await api<{ transaction: FinanceTransaction }>("/api/finance/expenses", {
     method: "POST",
     body: JSON.stringify({
@@ -2143,13 +2256,18 @@ async function createExpenseFromReceipt(
         owedCents: split.amountCents,
       })),
       receiptItems: analysis.items,
+      receiptAnalysisId: analysisId,
     }),
   });
+
+  transactionId = transaction.id;
+  onCreated?.(transactionId);
+  }
 
   if (originalFile) {
     const upload = new FormData();
     upload.set("receipt", originalFile);
-    await apiForm(`/api/finance/expenses/${transaction.id}/receipt-file`, upload, "PUT");
+    await apiForm(`/api/finance/expenses/${transactionId}/receipt-file`, upload, "PUT");
   }
 }
 

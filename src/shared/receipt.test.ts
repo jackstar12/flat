@@ -181,3 +181,42 @@ describe("receipt analysis normalization", () => {
     ]);
   });
 });
+
+import { allocateReceiptRatio, canonicalReceiptRatio, normalizeReceiptIdentity } from "./receipt-learning";
+import type { ReceiptItem } from "./types";
+
+describe("correction ratios", () => {
+  const item = (amountCents: number, amounts: number[]): ReceiptItem => ({ name: "Probe", normalizedName: "Probe", category: "Sonstiges", quantity: null, assignmentReason: "Test", amountCents,
+    splits: roommateIds.map((roommateId, i) => ({ roommateId, amountCents: amounts[i] })) });
+  it("canonicalizes equal cent remainders and credits in stable roommate order", () => {
+    expect(canonicalReceiptRatio(item(301, [100, 101, 100]), roommateIds)).toEqual([1, 1, 1]);
+    expect(canonicalReceiptRatio(item(-301, [-101, -100, -100]), roommateIds)).toEqual([1, 1, 1]);
+    expect(canonicalReceiptRatio(item(999, [500, 499, 0]), roommateIds)).toEqual([1, 1, 0]);
+    expect(allocateReceiptRatio(-101, [50, 50, 0], roommateIds)).toEqual([
+      { roommateId: "kran", amountCents: -51 }, { roommateId: "stadlmann", amountCents: -50 },
+    ]);
+    const equal = canonicalReceiptRatio(item(301, [101, 100, 100]), roommateIds)!;
+    expect(allocateReceiptRatio(1200, equal, roommateIds).map((s) => s.amountCents)).toEqual([400, 400, 400]);
+    expect(allocateReceiptRatio(-1200, equal, roommateIds).map((s) => s.amountCents)).toEqual([-400, -400, -400]);
+    expect(canonicalReceiptRatio(item(300, [100, 200, 0]), roommateIds)).toEqual([1, 2, 0]);
+    expect(canonicalReceiptRatio(item(3, [1, 2, 0]), roommateIds)).toEqual([1, 2, 0]);
+    expect(allocateReceiptRatio(1200, [1, 2, 0], roommateIds).map((s) => s.amountCents)).toEqual([400, 800]);
+    expect(allocateReceiptRatio(1, [1, 1, 0], roommateIds)).toEqual([{ roommateId: "kran", amountCents: 1 }]);
+    expect(normalizeReceiptIdentity("  BIO   ÄPFEL ")).toBe("bio äpfel");
+  });
+  it("rejects zero, invalid totals, duplicate people and mixed signs", () => {
+    for (const value of [item(0, [0, 0, 0]), item(100, [50, 49, 0]), item(100, [110, -10, 0]), item(-100, [-110, 10, 0])]) {
+      expect(canonicalReceiptRatio(value, roommateIds)).toBeNull();
+    }
+    const duplicate = item(100, [50, 50, 0]); duplicate.splits[1].roommateId = "kran";
+    expect(canonicalReceiptRatio(duplicate, roommateIds)).toBeNull();
+  });
+  it("explicit item rules override legacy equal heuristics including semantic rule IDs", () => {
+    const rules = [{ id: "own-oil", target: "item" as const, match: "Olivenöl", shares: { kran: 100, stadlmann: 0, mitter: 0 }, extraDescription: null }];
+    for (const name of ["Olivenöl", "OLIO SKU 123"]) {
+      const result = normalizeReceiptAnalysis({ items: [{ ...item(301, [101, 100, 100]), name, assignmentRuleId: "own-oil", assignmentReason: "gleichmäßig" }] }, roommateIds, rules);
+      expect(result.items[0].splits).toEqual([{ roommateId: "kran", amountCents: 301 }]);
+      expect(result.items[0].assignmentReason).toBe("WG-Regel: Olivenöl");
+    }
+  });
+});

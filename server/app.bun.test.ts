@@ -209,3 +209,182 @@ describe("verified proxy identity", () => {
     expect(() => parseIdentityMappings(undefined)).toThrow();
   });
 });
+
+// Real routes + isolated SQLite; only inference is injected. No provider call.
+import type { ReceiptAnalysis, ReceiptItem, ReceiptLearningPayload, ReceiptAssignmentRule } from "../src/shared/types";
+import { aggregateReceiptSplits } from "../src/shared/receipt";
+
+describe("conservative receipt learning", () => {
+  const headers = { ...identityHeaders, "X-Flat-Proxy-Token": proxyToken, Origin: origin };
+  const fixtureItem = (name = "Lernprodukt", amount = 300): ReceiptItem => ({ name, normalizedName: name, category: "Sonstiges", quantity: "1", amountCents: amount, assignmentReason: "Vorschlag",
+    splits: roommateIds.map((roommateId) => ({ roommateId, amountCents: amount / 3 })) });
+  let sourceNumber = 0;
+  async function analyze(items = [fixtureItem()], file?: File, text = `synthetic independent receipt ${++sourceNumber}`) {
+    const body = new FormData(); body.set("receiptText", text); if (file) body.set("receipt", file);
+    const response = await app.request("/api/finance/receipt/analyze", { method: "POST", headers, body }, {
+      ...bindings(), analyzeReceipt: async () => JSON.stringify({ merchant: "Test", items, warnings: [] }),
+    });
+    expect(response.status).toBe(200);
+    return await response.json() as { analysis: ReceiptAnalysis; analysisId: string };
+  }
+  function expense(draft: { analysis: ReceiptAnalysis; analysisId: string }, target?: string) {
+    const receiptItems = draft.analysis.items.map((item) => target ? { ...item, splits: [{ roommateId: target, amountCents: item.amountCents }] } : item);
+    return { receiptAnalysisId: draft.analysisId, description: "Synthetic receipt", paidBy: "kran", paidAt: "2026-10-05", splitMode: "custom", participantIds: [], amountCents: draft.analysis.totalCents,
+      receiptItems, splits: aggregateReceiptSplits(receiptItems, roommateIds).map((s) => ({ roommateId: s.roommateId, owedCents: s.amountCents })) };
+  }
+  async function save(draft: Awaited<ReturnType<typeof analyze>>, target?: string) {
+    const body = expense(draft, target);
+    const response = await request("/api/finance/expenses", "", body);
+    expect(response.status).toBe(201);
+    return { body, transaction: (await response.json() as { transaction: { id: string } }).transaction };
+  }
+  async function state() {
+    return await (await app.request("/api/receipt-learning", { headers }, bindings())).json() as ReceiptLearningPayload;
+  }
+  async function change(key: string, action: string) {
+    const response = await request("/api/receipt-learning/product", "", { key, action });
+    expect(response.status).toBe(200);
+  }
+  async function rules(next: ReceiptAssignmentRule[]) {
+    const current = await (await app.request("/api/receipt-rules", { headers }, bindings())).json() as { revision: string; rules: ReceiptAssignmentRule[] };
+    const response = await request("/api/receipt-rules", "", { rules: next, revision: current.revision }, "PUT");
+    expect(response.status).toBe(200);
+  }
+  test("only saved corrections count; two independent receipts influence the actual next analysis", async () => {
+    await analyze(); // abandoned
+    await save(await analyze()); // unchanged guess
+    expect((await state()).products).toEqual([]);
+    const first = await analyze(); const saved = await save(first, "kran");
+    expect((await state()).products[0]).toMatchObject({ evidenceCount: 1, status: "pending" });
+    expect((await analyze()).analysis.items[0].splits).toHaveLength(3);
+    const replay = await request("/api/finance/expenses", "", saved.body);
+    expect(replay.status).toBe(200);
+    expect((await replay.json() as { transaction: { id: string } }).transaction.id).toBe(saved.transaction.id);
+    expect((await state()).products[0].evidenceCount).toBe(1);
+    await save(await analyze(), "kran");
+    expect((await state()).products[0]).toMatchObject({ evidenceCount: 2, status: "active", weights: [1, 0, 0] });
+    const next = await analyze();
+    expect(next.analysis.items[0].splits).toEqual([{ roommateId: "kran", amountCents: 300 }]);
+    expect(next.analysis.items[0].assignmentReason).toContain("bisherigen Korrekturen");
+    await save(next); // accepting a learned guess must never reinforce it
+    expect((await state()).products[0].evidenceCount).toBe(2);
+  });
+  test("contradictions suspend suggestions until the recent three corrections agree", async () => {
+    for (let i = 0; i < 2; i++) await save(await analyze(), "kran");
+    await save(await analyze(), "mitter");
+    expect((await state()).products[0].status).toBe("conflict");
+    expect((await analyze()).analysis.items[0].splits).toHaveLength(3);
+    await save(await analyze(), "mitter");
+    expect((await state()).products[0].status).toBe("conflict");
+    await save(await analyze(), "mitter");
+    expect((await analyze()).analysis.items[0].splits).toEqual([{ roommateId: "mitter", amountCents: 300 }]);
+  });
+  test("original upload gates evidence, preserves bytes and safely deduplicates POST and PUT retries", async () => {
+    const file = new File(["synthetic original image"], "test.png", { type: "image/png" });
+    const draft = await analyze(undefined, file); const saved = await save(draft, "kran");
+    expect((await state()).products).toEqual([]);
+    const put = async (value: File) => { const body = new FormData(); body.set("receipt", value); return app.request(`/api/finance/expenses/${saved.transaction.id}/receipt-file`, { method: "PUT", headers, body }, bindings()); };
+    expect((await put(new File(["wrong"], "test.png", { type: "image/png" }))).status).toBe(400);
+    expect((await state()).products).toEqual([]);
+    expect((await put(file)).status).toBe(200); expect((await put(file)).status).toBe(200);
+    expect((await state()).products[0].evidenceCount).toBe(1);
+    const original = await app.request(`/api/finance/expenses/${saved.transaction.id}/receipt-file`, { headers }, bindings());
+    expect(await original.text()).toBe(await file.text());
+    await save(await analyze(undefined, file), "kran"); // same source is not independent
+    expect((await state()).products[0].evidenceCount).toBe(1);
+    await request(`/api/finance/expenses/${saved.transaction.id}`, "", saved.body, "PATCH");
+    expect((await state()).products).toEqual([]);
+    expect((await put(file)).status).toBe(200);
+    expect((await state()).products).toEqual([]); // an old upload cannot resurrect invalidated evidence
+  });
+  test("rejects foreign/fabricated analyses, mismatched items and invalid saves; legacy clients never teach", async () => {
+    const draft = await analyze();
+    const body = expense(draft, "kran");
+    expect((await request("/api/finance/expenses", "", { ...body, receiptAnalysisId: crypto.randomUUID() })).status).toBe(409);
+    database.prepare("UPDATE receipt_analysis_drafts SET actor_id = 'mitter' WHERE id = ?").bind(draft.analysisId).run();
+    expect((await request("/api/finance/expenses", "", body)).status).toBe(409);
+    database.prepare("UPDATE receipt_analysis_drafts SET actor_id = 'kran' WHERE id = ?").bind(draft.analysisId).run();
+    const mismatch = structuredClone(body); mismatch.receiptItems[0].name = "different";
+    expect((await request("/api/finance/expenses", "", mismatch)).status).toBe(400);
+    const invalid = structuredClone(body); invalid.receiptItems[0].splits[0].amountCents = 299;
+    expect((await request("/api/finance/expenses", "", invalid)).status).toBe(400);
+    expect((await state()).products).toEqual([]);
+    const legacy = { ...body, receiptAnalysisId: undefined };
+    expect((await request("/api/finance/expenses", "", legacy)).status).toBe(201);
+    expect((await state()).products).toEqual([]);
+  });
+  test("signed corrections work, mixed signs never teach, and duplicate items count once", async () => {
+    const draft = await analyze([fixtureItem("Kauf", 600), fixtureItem("Rabatt", -300)]);
+    await save(draft, "kran");
+    const second = await analyze([fixtureItem("Kauf", 600), fixtureItem("Rabatt", -300)]);
+    await save(second, "kran");
+    expect((await analyze([fixtureItem("Kauf", 600), fixtureItem("Rabatt", -300)])).analysis.items[1].splits).toEqual([{ roommateId: "kran", amountCents: -300 }]);
+    const mixed = await analyze([fixtureItem("Mixed")]); const body = expense(mixed);
+    body.receiptItems[0].splits = [{ roommateId: "kran", amountCents: 400 }, { roommateId: "mitter", amountCents: -100 }];
+    body.splits = [{ roommateId: "kran", owedCents: 400 }, { roommateId: "mitter", owedCents: -100 }];
+    expect((await request("/api/finance/expenses", "", body)).status).toBe(201);
+    expect((await state()).products.some((p) => p.key === "mixed")).toBe(false);
+    await save(await analyze([fixtureItem("Doppelt"), fixtureItem("Doppelt")]), "kran");
+    expect((await state()).products.find((p) => p.key === "doppelt")?.evidenceCount).toBe(1);
+  });
+  test("reset, per-product disable, overall pause and expense deletion have lasting effects", async () => {
+    await save(await analyze(), "kran"); const saved = await save(await analyze(), "kran");
+    await change("lernprodukt", "disable");
+    expect((await analyze()).analysis.items[0].splits).toHaveLength(3);
+    await save(await analyze(), "mitter");
+    expect((await state()).products[0].evidenceCount).toBe(2);
+    await change("lernprodukt", "enable");
+    expect((await analyze()).analysis.items[0].splits).toHaveLength(1);
+    await request("/api/receipt-learning", "", { enabled: false }, "PATCH");
+    await save(await analyze(), "mitter");
+    expect((await state()).products[0].evidenceCount).toBe(2);
+    await request("/api/receipt-learning", "", { enabled: true }, "PATCH");
+    await request(`/api/finance/expenses/${saved.transaction.id}`, "", {}, "DELETE");
+    expect((await state()).products[0].status).toBe("pending");
+    expect((await request("/api/finance/expenses", "", saved.body)).status).toBe(409);
+    await change("lernprodukt", "reset");
+    expect((await state()).products[0].evidenceCount).toBe(0);
+    expect((await analyze()).analysis.items[0].splits).toHaveLength(3);
+    await save(await analyze(), "mitter");
+    expect((await state()).products[0]).toMatchObject({ evidenceCount: 1, status: "pending" });
+  });
+  test("explicit item/category rules beat learning and legacy equal overrides; revisions prevent lost updates", async () => {
+    await rules([]);
+    for (let i = 0; i < 2; i++) await save(await analyze([fixtureItem("Olivenöl")]), "kran");
+    expect((await analyze([fixtureItem("Olivenöl")])).analysis.items[0].splits).toHaveLength(1);
+    const rule: ReceiptAssignmentRule = { id: "explicit", target: "item", match: "Olivenöl", shares: { kran: 0, stadlmann: 100, mitter: 0 }, extraDescription: null };
+    await rules([rule]);
+    expect((await analyze([fixtureItem("Olivenöl")])).analysis.items[0].splits).toEqual([{ roommateId: "stadlmann", amountCents: 300 }]);
+    await rules([{ ...rule, target: "category", match: "Sonstiges" }]);
+    expect((await analyze([fixtureItem("Olivenöl")])).analysis.items[0].splits).toEqual([{ roommateId: "stadlmann", amountCents: 300 }]);
+    const current = await (await app.request("/api/receipt-rules", { headers }, bindings())).json() as { revision: string; rules: ReceiptAssignmentRule[] };
+    await rules([]);
+    expect((await request("/api/receipt-rules", "", current, "PUT")).status).toBe(409);
+    const fresh = await (await app.request("/api/receipt-rules", { headers }, bindings())).json() as { revision: string };
+    expect((await request("/api/receipt-rules", "", { revision: fresh.revision, rules: [rule, { ...rule, id: "two", match: "  OLIVENÖL " }] }, "PUT")).status).toBe(400);
+  });
+  test("true equal and exact non-equal weights survive a larger future receipt", async () => {
+    const original = fixtureItem("Gleichprobe", 301);
+    original.splits = [{ roommateId: "mitter", amountCents: 301 }];
+    for (let i = 0; i < 2; i++) {
+      const draft = await analyze([original]); const body = expense(draft);
+      body.receiptItems[0].splits = [{ roommateId: "kran", amountCents: 101 }, { roommateId: "stadlmann", amountCents: 100 }, { roommateId: "mitter", amountCents: 100 }];
+      body.splits = body.receiptItems[0].splits.map((split) => ({ roommateId: split.roommateId, owedCents: split.amountCents }));
+      expect((await request("/api/finance/expenses", "", body)).status).toBe(201);
+    }
+    expect((await state()).products[0].weights).toEqual([1, 1, 1]);
+    expect((await analyze([fixtureItem("Gleichprobe", 1200)])).analysis.items[0].splits.map((s) => s.amountCents)).toEqual([400, 400, 400]);
+  });
+  test("a validated semantic Beeren rule outranks a learned Erdbeeren preference", async () => {
+    const current = await (await app.request("/api/receipt-rules", { headers }, bindings())).json() as { rules: ReceiptAssignmentRule[] };
+    const berryRule = current.rules.find((r) => r.id === "rule-beeren")!;
+    await rules([]);
+    for (let i = 0; i < 2; i++) await save(await analyze([fixtureItem("Erdbeeren")]), "mitter");
+    await rules([berryRule]);
+    const item = { ...fixtureItem("Erdbeeren"), assignmentRuleId: "rule-beeren" };
+    const result = await analyze([item]);
+    expect(result.analysis.items[0].splits).toEqual([{ roommateId: "kran", amountCents: 195 }, { roommateId: "stadlmann", amountCents: 105 }]);
+    expect(result.analysis.items[0].assignmentReason).toBe("WG-Regel: Beeren");
+  });
+
+});

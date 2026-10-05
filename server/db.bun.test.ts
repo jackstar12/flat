@@ -20,7 +20,7 @@ describe("LocalDatabase", () => {
   test("applies migrations once and supports atomic batches", () => {
     database = new LocalDatabase(":memory:");
 
-    expect(database.migrate()).toEqual(["0001_initial.sql", "0002_chore_weekday.sql"]);
+    expect(database.migrate()).toEqual(["0001_initial.sql", "0002_chore_weekday.sql", "0003_receipt_learning.sql"]);
     expect(database.migrate()).toEqual([]);
 
     database.batch([
