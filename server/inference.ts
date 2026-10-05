@@ -9,7 +9,7 @@ type ReceiptRequest = {
   outputSchema: Record<string, unknown>;
 };
 
-export const receiptModel = "gpt-5.6-sol";
+export const receiptModel = "gpt-6.1-sol";
 export const receiptReasoningEffort = "low";
 const maximumResponseBytes = 2_000_000;
 

@@ -14,12 +14,12 @@ describe("receipt inference", () => {
   test("preserves model, schema, vision and disables tools", async () => {
     const fetcher = (async (_url: unknown, init: RequestInit) => {
       const body = JSON.parse(init.body as string);
-      expect(body.model).toBe("gpt-5.6-sol");
+      expect(body.model).toBe("gpt-6.1-sol");
       expect(body.reasoning).toEqual({ effort: "low" });
       expect(body.tools).toEqual([]);
       expect(body.tool_choice).toBe("none");
       expect(body.text.format.schema).toEqual(request.outputSchema);
-      expect(body.input[0].content[1].image_url).toStartWith("data:image/png;base64,");
+      expect(body.input[0].content[1].image_url).toBe(`data:image/png;base64,${Buffer.from("synthetic").toString("base64")}`);
       return new Response(envelope('{"total":100}'));
     }) as unknown as typeof fetch;
     expect(await analyzeReceipt({ ...request, document: new File(["synthetic"], "receipt.png", { type: "image/png" }) }, { fetch: fetcher })).toBe('{"total":100}');
@@ -73,6 +73,15 @@ describe("receipt inference", () => {
   });
   test("redacts provider errors", async () => {
     await expect(analyzeReceipt(request, { fetch: fake("secret provider details", 401) })).rejects.toThrow("Rechnungsanalyse fehlgeschlagen (HTTP 401).");
+  });
+  test("fails once without a second model request on provider failure", async () => {
+    let calls = 0;
+    const fetcher = (async () => {
+      calls++;
+      return new Response("private provider details", { status: 503 });
+    }) as unknown as typeof fetch;
+    await expect(analyzeReceipt(request, { fetch: fetcher })).rejects.toThrow("Rechnungsanalyse fehlgeschlagen (HTTP 503).");
+    expect(calls).toBe(1);
   });
   test("times out actual fetch", async () => {
     const server = Bun.serve({ port: 0, fetch: async () => { await Bun.sleep(100); return new Response("late"); } });
