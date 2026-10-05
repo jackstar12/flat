@@ -87,6 +87,8 @@ type ReceiptImportForm = {
   receiptText: string;
 };
 
+const transactionsPerPage = 10;
+
 const today = () => new Date().toISOString().slice(0, 10);
 
 const defaultExpenseForm = (): ExpenseForm => ({
@@ -249,7 +251,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-cloud text-ink">
-      {authExpired && <div role="alert" className="global-auth-alert fixed inset-x-0 top-0 z-30 border-b border-line bg-white p-4 shadow-soft">
+      {authExpired && <div role="alert" className="global-auth-alert mx-4 mt-3 rounded-md border border-line bg-white px-3 py-2 text-sm sm:mx-auto sm:max-w-2xl">
         {expiryMessage}
         <ReauthControls />
       </div>}
@@ -315,8 +317,16 @@ function FinanceView({
   const [settlementError, setSettlementError] = useState("");
   const settlementBusy = useRef(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [page, setPage] = useState(1);
   const sortedBalances = data?.balances ?? [];
   const transactions = data?.transactions ?? [];
+  const pageCount = Math.max(1, Math.ceil(transactions.length / transactionsPerPage));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = (currentPage - 1) * transactionsPerPage;
+  const visibleTransactions = transactions.slice(pageStart, pageStart + transactionsPerPage);
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
   const totalSpentCents = transactions.reduce(
     (total, transaction) => total + (transaction.type === "expense" ? transaction.amountCents : 0),
     0,
@@ -332,9 +342,9 @@ function FinanceView({
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
-      <section className="space-y-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)] xl:gap-6">
+      <section className="min-w-0 space-y-5">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h2 className="section-title">Finanzen</h2>
             <p className="section-subtitle">Ausgaben, Ausgleichszahlungen und aktuelle Salden.</p>
@@ -357,11 +367,11 @@ function FinanceView({
           ))}
         </div>
 
-        <div className="rounded-md border border-line bg-white">
+        <section aria-labelledby="ledger-title" className="min-w-0 rounded-md border border-line bg-white">
           <div className="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
             <div className="flex items-center gap-2">
               <Receipt size={18} className="text-moss" />
-              <h3 className="font-semibold">Buchungen</h3>
+              <h3 id="ledger-title" className="font-semibold">Buchungen</h3>
             </div>
             <div className="min-w-0 text-right" data-testid="total-spent">
               <span className="block text-[10px] font-medium uppercase tracking-[0.08em] text-ink/45">
@@ -374,9 +384,9 @@ function FinanceView({
           </div>
           <div className="divide-y divide-line">
             {transactions.length === 0 ? (
-              <EmptyState label="Noch keine Eintrage." />
+              <EmptyState label="Noch keine Buchungen." />
             ) : (
-              transactions.map((transaction) => (
+              visibleTransactions.map((transaction) => (
                 <LedgerRow
                   key={transaction.id}
                   transaction={transaction}
@@ -393,10 +403,30 @@ function FinanceView({
               ))
             )}
           </div>
-        </div>
+          {transactions.length > 0 ? (
+            <nav aria-label="Buchungsseiten" className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-cloud/50 px-4 py-3 text-sm">
+              <p role="status" aria-live="polite" className="text-ink/65">
+                {pageStart + 1}–{Math.min(pageStart + transactionsPerPage, transactions.length)} von {transactions.length} Buchungen
+              </p>
+              <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto">
+                <button type="button" className="secondary-button px-3 text-sm disabled:cursor-not-allowed disabled:opacity-40" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Zurück</button>
+                <label className="order-first flex w-full items-center justify-center gap-2 sm:order-none sm:w-auto">
+                  Seite
+                  <input aria-label="Buchungsseite" className="input w-16 px-2 py-2 text-sm" type="number" min={1} max={pageCount} value={currentPage}
+                    onChange={(event) => {
+                      const next = event.currentTarget.valueAsNumber;
+                      if (Number.isFinite(next)) setPage(Math.max(1, Math.min(pageCount, Math.trunc(next))));
+                    }} />
+                  <span>von {pageCount}</span>
+                </label>
+                <button type="button" className="secondary-button px-3 text-sm disabled:cursor-not-allowed disabled:opacity-40" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Weiter</button>
+              </div>
+            </nav>
+          ) : null}
+        </section>
       </section>
 
-      <aside className="space-y-5">
+      <aside className="min-w-0 space-y-5">
         <ProductTrackingCard transactions={transactions} />
 
         <div className="rounded-md border border-line bg-white p-4">
@@ -429,6 +459,7 @@ function FinanceView({
                             paidAt: today(),
                             description: "",
                           });
+                          setPage(1);
                           onChanged();
                         } catch (unknownError) {
                           onError(readError(unknownError));
@@ -460,6 +491,7 @@ function FinanceView({
                   await submitSettlement(settlementForm);
                   setSettlementForm(defaultSettlementForm());
                   setSettlementOpen(false);
+                  setPage(1);
                   onChanged();
                 } catch (unknownError) {
                   setSettlementError(readError(unknownError));
@@ -505,6 +537,7 @@ function FinanceView({
           onClose={() => setExpenseOpen(false)}
           onSaved={() => {
             setExpenseOpen(false);
+            if (!editingExpense) setPage(1);
             setEditingExpense(null);
             onChanged();
           }}
@@ -518,6 +551,7 @@ function FinanceView({
           onClose={() => setReceiptOpen(false)}
           onSaved={() => {
             setReceiptOpen(false);
+            setPage(1);
             onChanged();
           }}
           onError={onError}
@@ -1852,14 +1886,14 @@ function LedgerRow({
   const hasReceiptDetails = receiptItems.length > 0 || Boolean(transaction.receiptUpload);
 
   return (
-    <article className="p-4">
+    <article className="min-w-0 px-4 py-4 sm:px-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-mint text-moss">
               {isExpense ? <Receipt size={17} /> : <WalletCards size={17} />}
             </span>
-            <h4 className="font-semibold">{transaction.description}</h4>
+            <h4 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{transaction.description}</h4>
           </div>
           <p className="mt-1 text-sm text-ink/70">
             {formatDate(transaction.paidAt)} ·{" "}
@@ -1962,6 +1996,7 @@ function LedgerRow({
 }
 
 function ProductTrackingCard({ transactions }: { transactions: FinanceTransaction[] }) {
+  const [expanded, setExpanded] = useState(false);
   const { categories, products, positionCount } = summarizeProductTracking(transactions);
   const largestCategory = Math.max(...categories.map((entry) => Math.abs(entry.amountCents)), 1);
 
@@ -1979,8 +2014,8 @@ function ProductTrackingCard({ transactions }: { transactions: FinanceTransactio
       </div>
 
       {categories.length ? (
-        <div className="space-y-3 p-4">
-          {categories.map((entry) => (
+        <div id="tracking-categories" className="space-y-3 p-4">
+          {(expanded ? categories : categories.slice(0, 5)).map((entry) => (
             <div key={entry.name}>
               <div className="mb-1 flex items-baseline justify-between gap-3 text-sm">
                 <span className="truncate font-medium">{entry.name}</span>
@@ -1997,6 +2032,12 @@ function ProductTrackingCard({ transactions }: { transactions: FinanceTransactio
             </div>
           ))}
 
+          {categories.length > 5 ? (
+            <button type="button" aria-expanded={expanded} aria-controls="tracking-categories" className="flex min-h-10 w-full items-center justify-between gap-2 text-left text-sm font-semibold text-moss" onClick={() => setExpanded(!expanded)}>
+              {expanded ? "Weniger Warengruppen" : `Alle ${categories.length} Warengruppen anzeigen`}
+              <ChevronDown size={15} className={expanded ? "shrink-0 rotate-180" : "shrink-0"} />
+            </button>
+          ) : null}
           <details className="group border-t border-line pt-3">
             <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-moss [&::-webkit-details-marker]:hidden">
               Generalisierte Produkte

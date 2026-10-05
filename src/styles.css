@@ -157,3 +157,8 @@ body:has(dialog[open]) .global-auth-alert { display: none; }
   .app-shell { grid-template-columns: 1fr auto; }
   .app-navigation { grid-column: 1 / -1; grid-row: 2; }
 }
+
+/* Keep the global expiry notice compact and in flow, without covering drafts. */
+.global-auth-alert > span { margin: 0.5rem 0 0; gap: 0.375rem; }
+.global-auth-alert .secondary-button { padding: 0.375rem 0.625rem; font-size: 0.75rem; }
+.global-auth-alert > span > span { font-size: 0.75rem; color: rgb(26 38 33 / 65%); }
