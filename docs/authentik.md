@@ -167,3 +167,13 @@ misreading cents in otherwise legible text. Text/images remain temporary and are
 removed after inference. Ambiguous product abbreviations remain `Sonstiges` with
 a warning instead of guessing a category. Private PDF regression artifacts must
 remain outside Git; regression analysis must not save an expense.
+
+## Flat proxy lifetime preference (2026-10-06)
+
+At Jakob's explicit request, Flat provider 3 now uses
+`access_token_validity=days=365`, superseding the 30-day correction above.
+Only this native proxy field changed; central login stages, refresh validity,
+other applications and all access policies remain unchanged. This is a fixed
+365-day proxy session, not sliding expiry. Existing cookies are not extended:
+a fresh native login is needed. Rollback receipt:
+`/srv/app-data/authentik/data/flat-session-lifetime-365d-20261006.json`.
