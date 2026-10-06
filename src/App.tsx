@@ -899,29 +899,34 @@ function ReceiptImportPanel({
                               <span className="mb-1 block text-xs font-semibold text-ink/65">
                                 {nameFor(roommateId)}
                               </span>
-                              <input
-                                className="input px-2 py-2"
-                                aria-label={`${item.name}: ${nameFor(roommateId)} in Euro`}
-                                inputMode="decimal"
-                                step="0.01"
-                                type="number"
-                                value={euroInputFromCents(
-                                  item.splits.find((split) => split.roommateId === roommateId)?.amountCents ?? 0,
-                                )}
-                                onChange={(event) =>
-                                  setAnalysis((current) =>
-                                    current
-                                      ? updateReceiptItemSplit(
-                                          current,
-                                          index,
-                                          roommateId,
-                                          centsFromNumberInput(event.target.value),
-                                        )
-                                      : current,
-                                  )
-                                }
+                              <SplitAmountInput
+                                label={`${item.name}: ${nameFor(roommateId)} in Euro`}
+                                cents={item.splits.find((split) => split.roommateId === roommateId)?.amountCents ?? 0}
+                                onChange={(cents) => setAnalysis((current) => current
+                                  ? updateReceiptItemSplit(current, index, roommateId, cents) : current)}
                               />
+                              {!receiptItemIsValid(item) ? (
+                                <button type="button" className="mt-1 min-h-9 text-xs font-semibold text-moss"
+                                  onClick={() => setAnalysis((current) => {
+                                    if (!current) return current;
+                                    const row = current.items[index];
+                                    const others = row.splits.filter((split) => split.roommateId !== roommateId)
+                                      .reduce((sum, split) => sum + split.amountCents, 0);
+                                    return updateReceiptItemSplit(current, index, roommateId, row.amountCents - others);
+                                  })}>Rest hier</button>
+                              ) : null}
                             </label>
+                          ))}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2" aria-label={`${item.name}: Schnellaufteilung`}>
+                          {roommateIds.map((id) => (
+                            <button key={id} type="button"
+                              className={`min-h-10 rounded-md border px-3 py-2 text-sm font-semibold ${item.splits.length === 1 && item.splits[0].roommateId === id && receiptItemIsValid(item) ? "border-moss bg-moss text-white" : "border-line bg-white text-moss"}`}
+                              onClick={() => setAnalysis((current) => {
+                                if (!current) return current;
+                                return roommateIds.reduce((next, roommateId) =>
+                                  updateReceiptItemSplit(next, index, roommateId, roommateId === id ? current.items[index].amountCents : 0), current);
+                              })}>Nur {nameFor(id)}</button>
                           ))}
                         </div>
                         <button type="button" className="mt-2 text-sm font-semibold text-moss underline underline-offset-4"
@@ -936,7 +941,8 @@ function ReceiptImportPanel({
                             return next;
                           })}>Zu dritt teilen</button>
                         <p className={`mt-2 text-xs ${receiptItemIsValid(item) ? "text-ink/55" : "text-coral"}`}>
-                          Aufgeteilt: {formatMoney(item.splits.reduce((sum, split) => sum + split.amountCents, 0))}
+                          {receiptItemIsValid(item) ? "✓ Betrag stimmt" : `Differenz: ${formatMoney(item.amountCents - item.splits.reduce((sum, split) => sum + split.amountCents, 0))}`}
+                          {" · "}{formatMoney(item.amountCents)} gesamt
                         </p>
                       </article>
                     ))}
@@ -1326,6 +1332,15 @@ function ExpensePanel({
             </div>
           </div>
 
+          <div className="flex flex-wrap gap-2" aria-label="Schnellaufteilung">
+            {roommates.map((roommate) => (
+              <button key={roommate.id} type="button" className="secondary-button"
+                onClick={() => setForm((current) => ({ ...current, splitMode: "equal", participantIds: [roommate.id] }))}>
+                Nur {roommate.name}
+              </button>
+            ))}
+          </div>
+
           {form.splitMode === "equal" ? (
             <RoommateChecks
               selected={form.participantIds}
@@ -1346,9 +1361,22 @@ function ExpensePanel({
                   }
                 />
               ))}
-              <p className="sm:col-span-2 text-sm text-ink/70">
-                Summe: {Number.isNaN(amountCents) ? "-" : formatMoney(customSplitTotal(form.customSplits))}
-              </p>
+              <div className="sm:col-span-2 text-sm text-ink/70">
+                <p>Summe: {formatMoney(customSplitTotal(form.customSplits))}
+                  {Number.isFinite(amountCents) ? ` · Differenz: ${formatMoney(amountCents - customSplitTotal(form.customSplits))}` : ""}
+                </p>
+                {Number.isFinite(amountCents) && amountCents !== customSplitTotal(form.customSplits) ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {roommates.map((roommate) => {
+                      const rest = amountCents - customSplitTotal(Object.fromEntries(Object.entries(form.customSplits).filter(([id]) => id !== roommate.id)));
+                      return <button key={roommate.id} type="button" className="secondary-button" disabled={rest < 0}
+                        onClick={() => setForm((current) => ({ ...current, customSplits: { ...current.customSplits, [roommate.id]: euroInputFromCents(rest) } }))}>
+                        Rest an {roommate.name}
+                      </button>;
+                    })}
+                  </div>
+                ) : null}
+              </div>
             </div>
           )}
 
@@ -2177,6 +2205,26 @@ function RoommateSelect({
   );
 }
 
+function SplitAmountInput({ label, cents, onChange }: { label: string; cents: number; onChange: (cents: number) => void }) {
+  const [draft, setDraft] = useState(() => euroInputFromCents(cents));
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused) setDraft(euroInputFromCents(cents));
+  }, [cents, focused]);
+  return <input className="input px-2 py-2 tabular-nums" type="text" inputMode="decimal"
+    aria-label={label} value={draft}
+    onFocus={() => setFocused(true)}
+    onChange={(event) => {
+      const value = event.target.value;
+      if (!/^-?\d*(?:[.,]\d{0,2})?$/.test(value)) return;
+      setDraft(value);
+      const parsed = Number(value.replace(",", "."));
+      if (Number.isFinite(parsed)) onChange(Math.round(parsed * 100));
+    }}
+    onBlur={() => setFocused(false)}
+  />;
+}
+
 function MoneyInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <label className="block">
@@ -2369,10 +2417,7 @@ function receiptItemIsValid(item: ReceiptAnalysis["items"][number]): boolean {
   return item.splits.reduce((sum, split) => sum + split.amountCents, 0) === item.amountCents;
 }
 
-function centsFromNumberInput(value: string): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
-}
+
 
 async function submitSettlement(form: SettlementForm): Promise<void> {
   const amountCents = centsFromEuroInput(form.amount);

@@ -98,3 +98,28 @@ test("rejected saves stay editable and lost POST responses retry idempotently", 
   const state = await (await page.request.get("/api/receipt-learning")).json();
   expect(state.products.find((p: { key: string }) => p.key === product.toLowerCase()).evidenceCount).toBe(1);
 });
+
+test("split editor preserves decimal typing and one-person/remainder shortcuts balance exactly", async ({ page }, info) => {
+  const product = `Split UI ${info.project.name}`;
+  await page.goto("/");
+  await start(page, product, "split-ui");
+  const row = page.locator("article").filter({ has: page.getByRole("heading", { name: product, exact: true }) });
+  const kran = page.getByLabel(`${product}: Kran in Euro`);
+  await kran.fill("");
+  await kran.pressSequentially("1,23");
+  await expect(kran).toHaveValue("1,23");
+  await row.getByRole("button", { name: "Rest hier" }).last().click();
+  await expect(row).toContainText("Betrag stimmt");
+  await expect(kran).toHaveValue("1.23");
+  for (const name of ["Kran", "Stadlmann", "Mitter"]) {
+    await row.getByRole("button", { name: `Nur ${name}`, exact: true }).click();
+    for (const other of ["Kran", "Stadlmann", "Mitter"]) {
+      await expect(page.getByLabel(`${product}: ${other} in Euro`)).toHaveValue(other === name ? "3.00" : "0.00");
+    }
+    await expect(row).toContainText("Betrag stimmt");
+  }
+  await row.getByRole("button", { name: "Zu dritt teilen" }).click();
+  await expect(kran).toHaveValue("1.00");
+  await expect(row).toContainText("Betrag stimmt");
+  await row.screenshot({ path: info.outputPath("split-editor.png") });
+});
