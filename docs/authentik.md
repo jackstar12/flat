@@ -123,8 +123,15 @@ Real isolated Caddy tests demonstrated that the prior identity-only `copy_header
 configuration dropped successful refresh cookies. This proves a forwarding defect,
 not the cause of any particular live request failure. See
 [Caddy's documented expansion](https://caddyserver.com/docs/caddyfile/directives/forward_auth#expanded-form).
-The existing Authentik 30-day session setting applies at the next login; it does
-not extend already-issued sessions.
+On 2026-10-06 the actual native proxy lifetime was corrected:
+provider 3 now has `access_token_validity=days=30`. Authentik 2026.8.2 derives
+the proxy cookie/store lifetime from this setting and the callback claims expiry;
+`refresh_token_validity` alone does not extend it. The prior 30-second access
+setting caused roughly 30-second proxy sessions, not transparent refresh.
+Native login stages and refresh validity remain 30 days. A normal new login is
+needed; existing cookies are not extended. No custom session system was added.
+Native logout/revocation remain available; do not describe this as 30-second
+authorization revalidation.
 
 Automated tests use isolated SQLite and synthetic identities only. Final manual
 acceptance requires the user to sign in with their own email code, confirm their mapped roommate
