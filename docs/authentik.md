@@ -93,7 +93,8 @@ normal page navigation retains Authentik's top-level login redirect. The fronten
 keeps an unsaved form visible and offers **Erneut anmelden** in a separate tab.
 Leave the original tab open: its draft, selected file and analysis stay in memory
 only. After native login, return and choose **Anmeldung prüfen**; returning focus
-also revalidates the session. Only session/finance/task reads are refreshed. A
+also revalidates the session. Returning from background or reconnecting to the
+network also revalidates, including installed-app resumes. Only session/finance/task reads are refreshed. A
 successful check of the same roommate keeps the draft; an account change discards
 old drafts and data before loading the new account. Reloading/closing the original
 tab loses the draft. Nothing is stored in browser storage or automatically replayed.

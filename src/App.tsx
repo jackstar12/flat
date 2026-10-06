@@ -146,6 +146,7 @@ export default function App() {
     window.addEventListener("flat-auth-expired", expired);
     window.addEventListener("flat-auth-restored", restored);
     const verify = () => { void revalidate(); };
+    const visible = () => { if (document.visibilityState === "visible") verify(); };
     const accountChanged = () => {
       setSession(null); sessionRef.current = null;
       setFinance(null); setTasks(null); setIdentityRevision((value) => value + 1);
@@ -158,6 +159,8 @@ export default function App() {
     window.addEventListener("flat-auth-check", verify);
     window.addEventListener("flat-account-changed", accountChanged);
     window.addEventListener("focus", verify);
+    window.addEventListener("online", verify);
+    document.addEventListener("visibilitychange", visible);
     window.addEventListener("pageshow", restoredPage);
     return () => {
       window.removeEventListener("flat-auth-expired", expired);
@@ -165,6 +168,8 @@ export default function App() {
       window.removeEventListener("flat-auth-check", verify);
       window.removeEventListener("flat-account-changed", accountChanged);
       window.removeEventListener("focus", verify);
+      window.removeEventListener("online", verify);
+      document.removeEventListener("visibilitychange", visible);
       window.removeEventListener("pageshow", restoredPage);
     };
   }, []);

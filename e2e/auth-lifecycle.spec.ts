@@ -103,7 +103,7 @@ test("receipt reauthentication retains the selected file and text without repeat
   expect(requests).toBe(2);
 });
 
-test("a transient read rejection recovers without showing login or losing a draft", async ({ page, context }) => {
+for (const wakeEvent of ["focus", "online", "visibilitychange"]) test(`a transient read rejection recovers on ${wakeEvent} without login or draft loss`, async ({ page, context }) => {
   await context.request.get(login); await page.goto("/");
   await page.getByRole("button", { name: "Ausgabe", exact: true }).click();
   await page.getByLabel("Beschreibung").fill("Keep this draft through recovery");
@@ -113,7 +113,7 @@ test("a transient read rejection recovers without showing login or losing a draf
     if (reads === 1) await route.fulfill({ status: 401, json: { error: "Authentication required" } });
     else await route.continue();
   });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.evaluate((event) => (event === "visibilitychange" ? document : window).dispatchEvent(new Event(event)), wakeEvent);
   await expect.poll(() => reads).toBe(2);
   await expect(page.locator(".global-auth-alert")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Erneut anmelden" })).toHaveCount(0);
