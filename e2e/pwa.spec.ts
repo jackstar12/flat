@@ -106,7 +106,7 @@ test("anonymous install resources remain gated and no worker is installed", asyn
     expect(response.status()).toBe(302);
     expect(response.headers().location).toBe("/outpost.goauthentik.io/start");
     const backend = `http://127.0.0.1:${process.env.E2E_PORT ?? 4387}`;
-    expect((await context.request.get(`${backend}${path}`)).status()).toBe(401);
+    expect((await context.request.get(`${backend}${path}`)).status()).toBe(403);
   }
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Synthetic sign-in" })).toBeVisible();

@@ -17,7 +17,7 @@ export default defineConfig({
   },
   use: {
     baseURL: e2eBaseUrl,
-    extraHTTPHeaders: { Origin: e2eBaseUrl, "X-Flat-Proxy-Token": "a".repeat(64), "X-Flat-Email": "owner@example.test", "X-Flat-Uid": "fixture-owner" },
+    extraHTTPHeaders: { Origin: e2eBaseUrl, "X-Flat-Email": "owner@example.test", "X-Flat-Uid": "fixture-owner" },
     launchOptions: {
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ?? (existsSync("/snap/bin/chromium") ? "/snap/bin/chromium" : undefined),
     },
@@ -27,7 +27,6 @@ export default defineConfig({
     command: "bun server/index.ts",
     env: {
       FLAT_TRUSTED_ORIGINS: `${e2eBaseUrl},http://127.0.0.1:${process.env.E2E_AUTH_PROXY_PORT ?? e2ePort + 3}`,
-      FLAT_PROXY_TOKEN: "a".repeat(64),
       FLAT_IDENTITY_MAP: JSON.stringify([
         { email: "owner@example.test", uid: "fixture-owner", roommateId: "kran" },
         ...roommates.slice(1).map((roommate) => ({

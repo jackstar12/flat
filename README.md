@@ -22,7 +22,7 @@ bun install
 cp .env.example .env
 ```
 
-Set a private 64-hex `FLAT_PROXY_TOKEN`, matching only the authenticated ingress, and a private `FLAT_IDENTITY_MAP` (see [identity and onboarding](docs/authentik.md)). Every request except GET/HEAD health requires server-to-server proof plus an unambiguous Authentik email/UID mapping. There is no roommate picker or app identity cookie. Legacy `flat_session` cookies are ignored and expired; `SESSION_SECRET` is no longer used. Never expose the proof or private mapping in frontend code, Git or responses. Preserve exact `FLAT_TRUSTED_ORIGINS` for CSRF.
+Flat trusts its loopback/Tailnet transport. Public access must go through Caddy/Authentik; Caddy strips caller-supplied identity headers and forwards verified email/UID. Set the private `FLAT_IDENTITY_MAP` (see [identity and onboarding](docs/authentik.md)); no proxy secret or app login token is needed. Missing/ambiguous/unmapped identities are denied. Legacy `flat_session` cookies are ignored and expired. Keep the backend private and preserve exact `FLAT_TRUSTED_ORIGINS` for CSRF.
 
 Start the frontend and API in development mode:
 

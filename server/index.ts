@@ -3,7 +3,6 @@ import { resolve, sep } from "node:path";
 import { analyzeReceipt } from "./inference";
 import { readConfig } from "./config";
 import { LocalDatabase } from "./db";
-import { hasProxyProof } from "./proxy";
 import { verifiedRoommate } from "./identity";
 import { app } from "./app";
 
@@ -13,7 +12,6 @@ const database = new LocalDatabase(config.databasePath);
 const migrations = database.migrate();
 const bindings = {
   DB: database,
-  PROXY_TOKEN: config.proxyToken,
   IDENTITY_MAP: config.identityMappings,
   TRUSTED_ORIGINS: config.trustedOrigins,
   analyzeReceipt: analyzeReceipt,
@@ -30,10 +28,7 @@ const server = Bun.serve({
     if (url.pathname === "/healthz" || url.pathname === "/api" || url.pathname.startsWith("/api/")) {
       return app.fetch(request, bindings);
     }
-    if (!hasProxyProof(request, config.proxyToken)) {
-      return new Response("Unauthorized", { status: 401, headers: { "Cache-Control": "no-store" } });
-    }
-    if (!verifiedRoommate(request, config.proxyToken, config.identityMappings)) {
+    if (!verifiedRoommate(request, config.identityMappings)) {
       return new Response("Forbidden", { status: 403, headers: { "Cache-Control": "no-store" } });
     }
     if (apiOnly) {

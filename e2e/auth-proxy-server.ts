@@ -28,8 +28,7 @@ const auth = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
 const dir = await mkdtemp(join(tmpdir(), "flat-auth-caddy-"));
 const snippet = (await readFile(process.env.FLAT_TEST_PROXY_SNIPPET, "utf8"))
   .replaceAll("127.0.0.1:19000", `127.0.0.1:${auth.port}`)
-  .replaceAll("https://dev.tail685c39.ts.net:18787", backend.origin)
-  .replace("import /etc/caddy/flat-proxy-proof.caddy", `header_up X-Flat-Proxy-Token ${"a".repeat(64)}`);
+  .replaceAll("https://dev.tail685c39.ts.net:18787", backend.origin);
 if (snippet.includes("dev.tail685c39.ts.net") || snippet.includes("127.0.0.1:19000") || snippet.includes("/etc/caddy/")) throw new Error("Unreplaced production upstream in fixture");
 const config = `{\n admin off\n auto_https off\n}\n(public_upstream) {\n header_up -X-Authentik-*\n}\nhttp://127.0.0.1:${port} {\n bind 127.0.0.1\n route {\n${snippet}\n}\n}\n`;
 await writeFile(join(dir, "Caddyfile"), config);

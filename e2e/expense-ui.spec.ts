@@ -7,7 +7,6 @@ async function useRoommate(page: Page, index: number, baseURL: string) {
   const roommate = roommates[index];
   await page.setExtraHTTPHeaders({
     Origin: baseURL,
-    "X-Flat-Proxy-Token": "a".repeat(64),
     "X-Flat-Email": index === 0 ? "owner@example.test" : `ui-${roommate.id}@example.test`,
     "X-Flat-Uid": index === 0 ? "fixture-owner" : `ui-${roommate.id}`,
   });

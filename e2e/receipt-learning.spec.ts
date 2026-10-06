@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const origin = `http://127.0.0.1:${process.env.E2E_LEARNING_PORT ?? Number(process.env.E2E_PORT ?? 4387) + 2}`;
-test.use({ baseURL: origin, extraHTTPHeaders: { Origin: origin, "X-Flat-Proxy-Token": "a".repeat(64), "X-Flat-Email": "owner@example.test", "X-Flat-Uid": "fixture-owner" } });
+test.use({ baseURL: origin, extraHTTPHeaders: { Origin: origin, "X-Flat-Email": "owner@example.test", "X-Flat-Uid": "fixture-owner" } });
 async function start(page: Page, product: string, source: string, file = false) {
   await page.getByRole("button", { name: "Rechnung analysieren", exact: true }).click();
   await page.locator("summary").filter({ hasText: "Rechnungstext" }).click();

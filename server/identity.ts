@@ -1,5 +1,4 @@
 import { findRoommate } from "../src/shared/config";
-import { hasProxyProof } from "./proxy";
 
 export type IdentityMapping = { email: string; uid: string; roommateId: string };
 const emailPattern = /^[^\s,@]+@[^\s,@]+\.[^\s,@]+$/;
@@ -27,8 +26,7 @@ export function parseIdentityMappings(value: string | undefined): IdentityMappin
   }
 }
 
-export function verifiedRoommate(request: Request, token: string, mappings: readonly IdentityMapping[]) {
-  if (!hasProxyProof(request, token)) return null;
+export function verifiedRoommate(request: Request, mappings: readonly IdentityMapping[]) {
   const email = request.headers.get("X-Flat-Email") ?? "";
   const uid = request.headers.get("X-Flat-Uid") ?? "";
   if (!emailPattern.test(email) || !uidPattern.test(uid)) return null;

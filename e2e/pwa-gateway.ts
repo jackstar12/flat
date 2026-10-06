@@ -51,7 +51,6 @@ Bun.serve({ hostname: "127.0.0.1", port, async fetch(request) {
   if (url.pathname === "/manifest.webmanifest") manifestCookieRequests++;
   const headers = new Headers(request.headers);
   headers.delete("cookie");
-  headers.set("X-Flat-Proxy-Token", "a".repeat(64));
   headers.set("X-Flat-Email", "owner@example.test");
   headers.set("X-Flat-Uid", "fixture-owner");
   headers.set("Origin", upstream.origin);

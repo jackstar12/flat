@@ -201,6 +201,7 @@ test("creates, edits, completes, and deletes a rotation", async ({ page }, testI
 
 test("expired expense authentication offers top-level login without replay", async ({ page }) => {
   let posts = 0;
+  await page.route("**/api/session", route => route.fulfill({ status: 401, json: { error: "Authentication required" } }));
   await page.route("**/api/finance/expenses", async (route) => {
     if (route.request().method() === "POST") {
       posts++;
@@ -219,6 +220,7 @@ test("expired expense authentication offers top-level login without replay", asy
   await page.getByRole("link", { name: "Erneut anmelden" }).click();
   const popup = await popupPromise;
   await expect(popup.getByRole("heading", { name: /Angemeldet als/ })).toBeVisible();
+  await page.unroute("**/api/session");
   await page.getByRole("button", { name: "Anmeldung prüfen" }).click();
   await expect(page.getByLabel("Beschreibung")).toHaveValue("Unsaved expired request");
   expect(posts).toBe(1);

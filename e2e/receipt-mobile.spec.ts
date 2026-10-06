@@ -129,6 +129,7 @@ test("changed sources invalidate results; errors, empty analysis and expiry reta
   await expect(page.getByRole("button", { name: "Als Ausgabe speichern" })).toBeDisabled();
   await page.getByRole("button", { name: "1 · Beleg wählen" }).click();
   mode = "expired";
+  await page.route("**/api/session", route => route.fulfill({ status: 401, json: { error: "Authentication required" } }));
   await page.getByRole("button", { name: "Analysieren", exact: true }).click();
   await expect(page.getByRole("dialog").getByRole("link", { name: "Erneut anmelden" })).toBeVisible();
   await expect(page.getByLabel("Beschreibung", { exact: true })).toHaveValue("Mein Entwurf");

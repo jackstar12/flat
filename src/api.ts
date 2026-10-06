@@ -1,6 +1,6 @@
 import type { SessionPayload } from "./shared/types";
 
-export const expiryMessage = "Anmeldung abgelaufen. Die Anfrage wird nicht automatisch wiederholt. Bitte nach der Anmeldung den Speicherstand prüfen.";
+export const expiryMessage = "Anmeldung erforderlich. Bitte erneut anmelden; dein Entwurf bleibt hier erhalten. Die Anfrage wird nicht automatisch wiederholt.";
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code = "request_failed") { super(message); }
 }
@@ -48,7 +48,7 @@ async function decode<T>(response: Response, started: number): Promise<T> {
   return payload as T;
 }
 
-async function request<T>(path: string, options: RequestInit, sessionCheck = false): Promise<T> {
+async function request<T>(path: string, options: RequestInit, sessionCheck = false, recover = true): Promise<T> {
   if (blocked && !sessionCheck) throw new ApiError(expiryMessage, 401, "authentication_required");
   const started = generation;
   const headers = new Headers(options.headers);
@@ -60,10 +60,37 @@ async function request<T>(path: string, options: RequestInit, sessionCheck = fal
     throw new ApiError("Verbindung fehlgeschlagen. Der Speicherstand ist unklar; nichts wird automatisch wiederholt.", 0, "network");
   }
   if (started !== generation) throw new ApiError("Die Anmeldung hat sich geändert. Die alte Antwort wurde verworfen.", 0, "stale_response");
+  if (response.status === 401 && recover) {
+    if (sessionCheck) {
+      // Confirm a failed check once before asking the user to sign in.
+      return request<T>(path, options, true, false);
+    }
+    const { accountChanged } = await checkSession();
+    if (accountChanged) {
+      changed();
+      emit("flat-auth-check");
+      throw new ApiError("Das angemeldete Konto hat sich geändert. Entwürfe wurden verworfen.", 409, "identity_changed");
+    }
+    if (started !== generation) throw new ApiError("Die Anmeldung hat sich geändert. Die alte Antwort wurde verworfen.", 0, "stale_response");
+    // Only reads may be replayed. Saves/uploads can have ambiguous outcomes.
+    if (["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase())) {
+      return request<T>(path, options, false, false);
+    }
+    throw new ApiError("Anmeldung bestätigt. Bitte Speicherstand prüfen und bei Bedarf selbst erneut speichern; nichts wurde automatisch wiederholt.", 401, "authentication_recovered");
+  }
   return decode<T>(response, started);
 }
 
-export async function checkSession(): Promise<{ session: SessionPayload; accountChanged: boolean }> {
+type SessionResult = { session: SessionPayload; accountChanged: boolean };
+let sessionCheckInFlight: Promise<SessionResult> | null = null;
+export function checkSession(): Promise<SessionResult> {
+  // Focus events and parallel API failures share one check, not a refresh storm.
+  if (!sessionCheckInFlight) {
+    sessionCheckInFlight = verifySession().finally(() => { sessionCheckInFlight = null; });
+  }
+  return sessionCheckInFlight;
+}
+async function verifySession(): Promise<SessionResult> {
   const previous = actor;
   let session: SessionPayload;
   try {

@@ -142,7 +142,9 @@ export default function App() {
   const loggingOut = useRef(false);
   useEffect(() => {
     const expired = () => setAuthExpired(true);
+    const restored = () => setAuthExpired(false);
     window.addEventListener("flat-auth-expired", expired);
+    window.addEventListener("flat-auth-restored", restored);
     const verify = () => { void revalidate(); };
     const accountChanged = () => {
       setSession(null); sessionRef.current = null;
@@ -159,6 +161,7 @@ export default function App() {
     window.addEventListener("pageshow", restoredPage);
     return () => {
       window.removeEventListener("flat-auth-expired", expired);
+      window.removeEventListener("flat-auth-restored", restored);
       window.removeEventListener("flat-auth-check", verify);
       window.removeEventListener("flat-account-changed", accountChanged);
       window.removeEventListener("focus", verify);
@@ -1034,7 +1037,7 @@ function FormDialog({ title, onClose, pending = false, error, children }: {
       <h2 id={id} className="text-lg font-semibold">{title}</h2>
       <button type="button" className="icon-button shrink-0" aria-label="Schliessen" disabled={pending} onClick={onClose}><X size={18} /></button>
     </header>
-    {error ? <div role="alert" className="shrink-0 border-b border-line bg-coral/10 px-4 py-2 text-sm">{expired ? expiryMessage : error.includes("Anmeldung abgelaufen") ? "Anmeldung geprüft. Bitte Speicherstand kontrollieren und bei Bedarf selbst erneut speichern." : error}</div> : null}
+    {error ? <div role="alert" className="shrink-0 border-b border-line bg-coral/10 px-4 py-2 text-sm">{expired ? expiryMessage : error.includes("Anmeldung erforderlich") ? "Anmeldung geprüft. Bitte Speicherstand kontrollieren und bei Bedarf selbst erneut speichern." : error}</div> : null}
     {expired || error?.includes("Anmeldung prüfen") ? <ReauthControls /> : null}
     {children}
   </dialog>, document.body);

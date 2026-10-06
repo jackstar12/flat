@@ -84,7 +84,7 @@ test("receipt reauthentication retains the selected file and text without repeat
   page.on("request", (request) => { if (request.method() === "POST" && request.url().includes("/receipt/analyze")) requests++; });
   await page.getByRole("button", { name: "Analysieren", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("alert")).toContainText("Anmeldung abgelaufen");
+  await expect(dialog.getByRole("alert")).toContainText("Anmeldung erforderlich");
   await context.request.get(login);
   await dialog.getByRole("button", { name: "Anmeldung prüfen" }).click();
   await expect(dialog.getByRole("link", { name: "Erneut anmelden" })).toHaveCount(0);
@@ -101,4 +101,21 @@ test("receipt reauthentication retains the selected file and text without repeat
   await expect(dialog.getByRole("alert")).toContainText("Synthetic service failure");
   await expect(dialog.getByRole("link", { name: "Erneut anmelden" })).toHaveCount(0);
   expect(requests).toBe(2);
+});
+
+test("a transient read rejection recovers without showing login or losing a draft", async ({ page, context }) => {
+  await context.request.get(login); await page.goto("/");
+  await page.getByRole("button", { name: "Ausgabe", exact: true }).click();
+  await page.getByLabel("Beschreibung").fill("Keep this draft through recovery");
+  let reads = 0;
+  await page.route("**/api/finance", async route => {
+    reads++;
+    if (reads === 1) await route.fulfill({ status: 401, json: { error: "Authentication required" } });
+    else await route.continue();
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => reads).toBe(2);
+  await expect(page.locator(".global-auth-alert")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Erneut anmelden" })).toHaveCount(0);
+  await expect(page.getByLabel("Beschreibung")).toHaveValue("Keep this draft through recovery");
 });

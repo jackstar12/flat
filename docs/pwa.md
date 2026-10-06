@@ -33,7 +33,8 @@ have no offline fallback. An already open page can still display data or a draft
 in memory; this feature does not make that data available after an offline reload
 and does not add storage for it.
 
-For an expired API session, **Erneut anmelden** opens native login in a separate
+Transient API authentication failures are checked quietly; only reads may retry once.
+Saves/uploads are never replayed. For a confirmed missing API session, **Erneut anmelden** opens native login in a separate
 tab/window. Keep the original app window open to retain its draft and selected
 file in memory; reloading or closing it loses them. Return and use **Anmeldung
 prüfen** (focus also checks). The same roommate retains the draft; a changed

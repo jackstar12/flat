@@ -6,9 +6,11 @@ The node transport **must remain**. `svc:flat` and agency `:8787` are retired.
 
 Caddy removes all incoming `X-Flat-*` and authentication identity headers, invokes
 the existing native Authentik gate, copies only the successful response's
-`X-Authentik-Email` and `X-Authentik-Uid` to `X-Flat-Email` and `X-Flat-Uid`, and
-injects the private proxy proof. Flat requires all three on every request, including
-static assets. Identity headers alone cannot authenticate. Unknown, missing,
+`X-Authentik-Email` and `X-Authentik-Uid` into `X-Flat-Email` and `X-Flat-Uid`
+for Flat. The loopback listener and Tailnet are trusted; Flat requires the unique
+email/UID mapping on every request, including static assets. There is no shared
+proxy secret. Public clients must pass Caddy/Authentik and cannot choose identity
+headers; callers inside the trusted transport boundary can supply those headers. Unknown, missing,
 joined/duplicate or conflicting identities fail closed. Private mapping configuration
 rejects repeated emails, UIDs or roommate IDs at startup. Email matching is case-insensitive;
 UID matching is exact. There are no database migrations or changes to financial IDs.
@@ -79,6 +81,13 @@ their original financial meaning and may reference any existing roommate.
 
 ## Expiry and acceptance
 
+On a 401, the frontend first checks the session quietly (concurrent callers share
+one check; a failed session check is confirmed once). A successful same-account
+check retries a read once, never a mutation/upload. Failed writes retain their
+draft and ask the user to check saved state before manually retrying. Persistent
+401s show “Anmeldung erforderlich”, not a claim about token expiry. Account changes
+still discard old drafts and responses. No refresh timer, local JWT or mutation queue.
+
 Caddy returns JSON 401 without Location for expired/anonymous `/api` requests;
 normal page navigation retains Authentik's top-level login redirect. The frontend
 keeps an unsaved form visible and offers **Erneut anmelden** in a separate tab.
@@ -93,7 +102,7 @@ multi-step receipt upload.
 
 Every API call except the session check carries the last verified roommate as `X-Expected-Roommate-Id`.
 This is a concurrency guard, not an authentication credential: the backend still
-requires private proxy proof and the unique email/UID mapping. A mismatch returns
+requires the unique email/UID mapping from the trusted transport. A mismatch returns
 JSON 409 `identity_changed` before the route runs. This header must survive Caddy's
 identity stripping. Pending responses from a previous identity or logout are
 discarded. Logout clears in-memory identity/data/drafts before navigating to

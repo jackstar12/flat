@@ -12,7 +12,7 @@ if (process.env.FLAT_E2E_LEARNING !== "synthetic-only" || !path?.startsWith("/tm
 const database = new LocalDatabase(path);
 database.migrate();
 const bindings = {
-  DB: database, PROXY_TOKEN: "a".repeat(64),
+  DB: database,
   IDENTITY_MAP: [{ email: "owner@example.test", uid: "fixture-owner", roommateId: "kran" }],
   TRUSTED_ORIGINS: [`http://127.0.0.1:${port}`],
   analyzeReceipt: async ({ prompt }: { prompt: string }) => {

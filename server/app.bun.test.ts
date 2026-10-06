@@ -110,7 +110,6 @@ async function request(path: string, cookie: string, body: unknown, method = "PO
 function bindings() {
   return {
     DB: database,
-    PROXY_TOKEN: proxyToken,
     IDENTITY_MAP: [identity],
     TRUSTED_ORIGINS: [origin, "https://flat.public.test", "https://flat.private.test:8787"],
     analyzeReceipt: async () => {
@@ -167,12 +166,12 @@ describe("verified proxy identity", () => {
     });
     expect(response.status).toBe(403);
   });
-  test("identity spoofing cannot replace private proof", async () => {
+  test("trusted transport identity needs no shared proxy secret", async () => {
     for (const token of ["", "b".repeat(64), `${proxyToken}, ${proxyToken}`]) {
-      expect((await send("/api/finance", { "X-Flat-Proxy-Token": token, Cookie: await loginCookie() })).status).toBe(401);
+      expect((await send("/api/finance", { "X-Flat-Proxy-Token": token, Cookie: await loginCookie() })).status).toBe(200);
     }
     expect((await app.request("/healthz", {}, bindings())).status).toBe(200);
-    expect((await app.request("/healthz", { method: "POST" }, bindings())).status).toBe(401);
+    expect((await app.request("/healthz", { method: "POST" }, bindings())).status).toBe(404);
   });
   test("obsolete identity-selection endpoints cannot change attribution", async () => {
     for (const path of ["/api/login", "/api/logout"]) {
@@ -426,6 +425,6 @@ describe("auth lifecycle route regressions", () => {
       expect(await response.json()).toMatchObject({ code: "identity_changed" });
     }
     const denied = await app.request("/api/session", { headers: { "X-Expected-Roommate-Id": "kran" } }, bindings());
-    expect(denied.status).toBe(401); // concurrency marker is not authentication
+    expect(denied.status).toBe(403); // concurrency marker is not authentication
   });
 });

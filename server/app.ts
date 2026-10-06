@@ -2,7 +2,6 @@ import { analyzeWithJev, type ReceiptDecisionConfig } from "./receipt-decisions"
 import { applyReceiptLearning, correctionStatements, getAnalysisDraft, invalidateReceiptEvidence, learningState, receiptHash } from "./receipt-learning";
 import { normalizeReceiptIdentity } from "../src/shared/receipt-learning";
 import { verifiedRoommate, type IdentityMapping } from "./identity";
-import { hasProxyProof, isHealthRequest } from "./proxy";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { deleteCookie } from "hono/cookie";
@@ -38,7 +37,6 @@ import { receiptTrackingCategories, weekdays } from "../src/shared/types";
 
 type Env = {
   DB: LocalDatabase;
-  PROXY_TOKEN: string;
   IDENTITY_MAP: readonly IdentityMapping[];
   TRUSTED_ORIGINS: readonly string[];
   analyzeReceipt: typeof analyzeReceipt;
@@ -288,9 +286,6 @@ const app = new Hono<AppBindings>({ strict: false });
 
 app.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
-  if (!isHealthRequest(c.req.raw) && !hasProxyProof(c.req.raw, c.env.PROXY_TOKEN)) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
   await next();
 });
 
@@ -311,7 +306,7 @@ app.use("/api/*", async (c, next) => {
   if (c.req.header("Cookie")?.split(";").some((part) => part.trim().startsWith(`${sessionCookieName}=`))) {
     deleteCookie(c, sessionCookieName, { path: "/", httpOnly: true, sameSite: "Lax", secure: true });
   }
-  const roommate = verifiedRoommate(c.req.raw, c.env.PROXY_TOKEN, c.env.IDENTITY_MAP);
+  const roommate = verifiedRoommate(c.req.raw, c.env.IDENTITY_MAP);
   if (!roommate) return c.json({ error: "Keine eindeutige WG-Zuordnung. Bitte den Administrator kontaktieren." }, 403);
   // A browser's remembered actor is a concurrency guard, never identity proof.
   // The proxy intentionally strips X-Flat-*; this distinct header must survive.

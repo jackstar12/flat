@@ -137,9 +137,9 @@ describe("Jev decision stage", () => {
   });
 });
 
-const headers = { "X-Flat-Proxy-Token": "a".repeat(64), "X-Flat-Email": "owner@example.test", "X-Flat-Uid": "synthetic", Origin: "http://flat.test" };
+const headers = { "X-Flat-Email": "owner@example.test", "X-Flat-Uid": "synthetic", Origin: "http://flat.test" };
 function bindings(db: LocalDatabase, transport: JevTransport, items = [item("APFELSTGELSTARTA")]) {
-  return { DB: db, PROXY_TOKEN: "a".repeat(64), IDENTITY_MAP: [{ email: "owner@example.test", uid: "synthetic", roommateId: "kran" }], TRUSTED_ORIGINS: ["http://flat.test"],
+  return { DB: db, IDENTITY_MAP: [{ email: "owner@example.test", uid: "synthetic", roommateId: "kran" }], TRUSTED_ORIGINS: ["http://flat.test"],
     receiptDecisions: { provider: "jev" as const, transport }, analyzeReceipt: async () => JSON.stringify(extracted(items)) };
 }
 let sourceNumber = 0;
