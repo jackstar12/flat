@@ -16,7 +16,8 @@ export function completeChore(
   completedBy: string,
   completedAtIso: string,
 ): Chore {
-  const completedDate = completedAtIso.slice(0, 10);
+  chore = scheduledChore(chore, householdDate(completedAtIso));
+  const completedDate = householdDate(completedAtIso);
   const participantCount = chore.participantIds.length;
   const nextDueDate =
     chore.frequencyUnit === "week"
@@ -149,4 +150,27 @@ function formatDateOnly(date: Date): string {
 
 function lastDayOfMonthUtc(year: number, monthZeroBased: number): number {
   return new Date(Date.UTC(year, monthZeroBased + 1, 0)).getUTCDate();
+}
+
+/** Calendar date in the household timezone, independent of browser/server timezone. */
+export function householdDate(value: string | Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Vienna", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(value));
+}
+
+/** Project the current weekly occurrence without inventing completion history.
+ * nextDueDate/rotationIndex form the saved anchor; early completion already advances
+ * that anchor, so reads must never rotate it a second time before its due date.
+ */
+export function scheduledChore(chore: Chore, today = householdDate()): Chore {
+  if (!chore.isActive || chore.frequencyUnit !== "week") return chore;
+  const elapsedDays = (parseDateOnly(today).getTime() - parseDateOnly(chore.nextDueDate).getTime()) / 86_400_000;
+  const periods = Math.floor(elapsedDays / (7 * chore.frequencyInterval));
+  if (periods <= 0) return chore;
+  return {
+    ...chore,
+    nextDueDate: addFrequency(chore.nextDueDate, "week", periods * chore.frequencyInterval),
+    rotationIndex: normalizeRotationIndex(chore.rotationIndex + periods, chore.participantIds.length),
+  };
 }

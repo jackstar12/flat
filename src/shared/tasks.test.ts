@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { roommateIds } from "./config";
 import {
   addFrequency,
+  householdDate,
+  scheduledChore,
   completeChore,
   completeRotation,
   currentAssigneeId,
@@ -50,6 +52,26 @@ describe("task rules", () => {
     expect(currentAssigneeId({ ...baseChore, rotationIndex: 4 })).toBe(second);
   });
 
+  it("uses Vienna dates at midnight and daylight-saving boundaries", () => {
+    expect(householdDate("2026-10-06T22:30:00Z")).toBe("2026-10-07");
+    expect(householdDate("2026-10-27T23:30:00Z")).toBe("2026-10-28");
+    const completed = completeChore(baseChore, first, "2026-05-26T22:30:00Z");
+    expect(completed.nextDueDate).toBe("2026-06-03");
+  });
+
+  it("rotates on scheduled Wednesdays even without completion, including missed weeks", () => {
+    const chore = { ...baseChore, nextDueDate: "2026-09-23" };
+    expect(scheduledChore(chore, "2026-09-29").rotationIndex).toBe(0);
+    expect(scheduledChore(chore, "2026-09-30")).toMatchObject({ rotationIndex: 1, nextDueDate: "2026-09-30", lastCompletedAt: null });
+    expect(scheduledChore(chore, "2026-10-07")).toMatchObject({ rotationIndex: 2, nextDueDate: "2026-10-07", lastCompletedAt: null });
+    expect(scheduledChore(chore, "2026-10-14").rotationIndex).toBe(0);
+    expect(scheduledChore({ ...chore, frequencyInterval: 2 }, "2026-10-07").rotationIndex).toBe(1);
+    expect(scheduledChore({ ...chore, isActive: false }, "2026-10-07")).toEqual({ ...chore, isActive: false });
+    const completed = completeChore(chore, first, "2026-09-23T10:00:00Z");
+    expect(scheduledChore(completed, "2026-09-30").rotationIndex).toBe(1);
+    expect(scheduledChore(completed, "2026-10-07").rotationIndex).toBe(2);
+  });
+
   it("defaults chores to Wednesday", () => {
     expect(defaultChoreWeekday).toBe("wednesday");
   });
@@ -74,8 +96,8 @@ describe("task rules", () => {
   ])("keeps the weekly schedule anchored when completed %s", (_label, completedAt, expectedDueDate) => {
     const completed = completeChore(baseChore, first, completedAt);
 
-    expect(completed.rotationIndex).toBe(1);
-    expect(currentAssigneeId(completed)).toBe(second);
+    expect(completed.rotationIndex).toBe(_label === "more than a week late" ? 2 : 1);
+    expect(currentAssigneeId(completed)).toBe(_label === "more than a week late" ? third : second);
     expect(completed.nextDueDate).toBe(expectedDueDate);
     expect(completed.lastCompletedBy).toBe(first);
   });

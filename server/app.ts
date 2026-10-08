@@ -18,6 +18,9 @@ import {
 import { normalizeReceiptAnalysis } from "../src/shared/receipt";
 import {
   completeChore,
+  currentAssigneeId,
+  householdDate,
+  scheduledChore,
   completeRotation,
   defaultChoreWeekday,
   nextOccurrenceOnOrAfter,
@@ -240,10 +243,12 @@ const choreCreateSchema = z.object({
 });
 const choreUpdateSchema = z.object({
   ...choreFields,
+  assigneeId: roommateIdSchema.optional(),
   scheduleWeekday: z.enum(weekdays).nullable().optional(),
 });
 
 const rotationSchema = z.object({
+  assigneeId: roommateIdSchema.optional(),
   title: z.string().trim().min(1).max(100),
   description: z.string().trim().max(500).default(""),
   participantIds: z.array(roommateIdSchema).min(1),
@@ -763,7 +768,7 @@ app.patch("/api/tasks/rotations/:id", zValidator("json", rotationSchema), async 
       input.title,
       input.description,
       JSON.stringify(participants),
-      existing.rotationIndex % participants.length,
+      assignmentIndex(existing, participants, input.assigneeId),
       new Date().toISOString(),
       id,
       household.id,
@@ -811,7 +816,7 @@ app.post("/api/tasks", zValidator("json", choreCreateSchema), async (c) => {
   const actor = c.get("roommate");
   const id = crypto.randomUUID();
   const participants = stableParticipantIds(input.participantIds);
-  const nextDueDate = nextOccurrenceOnOrAfter(now.slice(0, 10), input.scheduleWeekday);
+  const nextDueDate = nextOccurrenceOnOrAfter(householdDate(now), input.scheduleWeekday);
 
   await c.env.DB
     .prepare(
@@ -846,7 +851,7 @@ app.patch("/api/tasks/:id", zValidator("json", choreUpdateSchema), async (c) => 
   const input = c.req.valid("json");
   const now = new Date().toISOString();
   const participants = stableParticipantIds(input.participantIds);
-  const rotationIndex = existing.rotationIndex % participants.length;
+  const rotationIndex = assignmentIndex(existing, participants, input.assigneeId);
   const updatesWeeklySchedule = existing.frequencyUnit === "week" || input.scheduleWeekday != null;
   const scheduleWeekday = updatesWeeklySchedule
     ? input.scheduleWeekday ?? existing.scheduleWeekday ?? defaultChoreWeekday
@@ -855,7 +860,7 @@ app.patch("/api/tasks/:id", zValidator("json", choreUpdateSchema), async (c) => 
   const frequencyInterval = updatesWeeklySchedule ? input.frequencyInterval : existing.frequencyInterval;
   const nextDueDate =
     scheduleWeekday && scheduleWeekday !== existing.scheduleWeekday
-      ? nextOccurrenceOnOrAfter(now.slice(0, 10), scheduleWeekday)
+      ? nextOccurrenceOnOrAfter(householdDate(now), scheduleWeekday)
       : existing.nextDueDate;
 
   await c.env.DB
@@ -1306,7 +1311,7 @@ function mapRotation(row: RotationRow): Rotation {
 }
 
 function mapChore(row: ChoreRow): Chore {
-  return {
+  return scheduledChore({
     id: row.id,
     title: row.title,
     description: row.description,
@@ -1322,7 +1327,7 @@ function mapChore(row: ChoreRow): Chore {
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  };
+  });
 }
 
 function stableParticipantIds(input: string[]): string[] {
@@ -1464,3 +1469,11 @@ app.onError((error, c) => {
 });
 
 export { app };
+
+function assignmentIndex(existing: Chore | Rotation, participants: string[], requested?: string): number {
+  if (requested && !participants.includes(requested)) {
+    throw new HTTPError(400, "Die zuständige Person muss teilnehmen.");
+  }
+  const index = participants.indexOf(requested ?? currentAssigneeId(existing));
+  return index < 0 ? 0 : index;
+}

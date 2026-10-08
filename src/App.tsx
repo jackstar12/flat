@@ -28,7 +28,7 @@ import { roommates, roommateIds, findRoommate, household } from "./shared/config
 import { normalizeReceiptIdentity } from "./shared/receipt-learning";
 import { aggregateReceiptSplits } from "./shared/receipt";
 import { resolveExpensePayer } from "./shared/expense-payer";
-import { currentAssigneeId, dateStatus, defaultChoreWeekday } from "./shared/tasks";
+import { currentAssigneeId, householdDate, dateStatus, defaultChoreWeekday } from "./shared/tasks";
 import type {
   Chore,
   FinancePayload,
@@ -66,6 +66,7 @@ type SettlementForm = {
 };
 
 type ChoreForm = {
+  assigneeId?: string;
   title: string;
   description: string;
   participantIds: string[];
@@ -75,6 +76,7 @@ type ChoreForm = {
 };
 
 type RotationForm = {
+  assigneeId?: string;
   title: string;
   description: string;
   participantIds: string[];
@@ -1410,6 +1412,14 @@ function TasksView({
   const chores = data?.chores ?? [];
   const rotations = data?.rotations ?? [];
 
+  // Refresh calendar projections while this screen stays open across a due day.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") onChanged();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [onChanged]);
+
   function openChore(chore?: Chore) {
     setEditingChore(chore ?? null);
     setFormOpen(true);
@@ -1470,7 +1480,7 @@ function TasksView({
           <TaskColumn
             key={status}
             status={status}
-            chores={chores.filter((chore) => dateStatus(chore.nextDueDate, today()) === status && chore.isActive)}
+            chores={chores.filter((chore) => dateStatus(chore.nextDueDate, householdDate()) === status && chore.isActive)}
             onEdit={openChore}
             onComplete={async (chore) => {
               try {
@@ -1632,7 +1642,7 @@ function RotationPanel({
 }) {
   const [form, setForm] = useState<RotationForm>(() =>
     rotation
-      ? { title: rotation.title, description: rotation.description, participantIds: rotation.participantIds }
+      ? { title: rotation.title, description: rotation.description, participantIds: rotation.participantIds, assigneeId: currentAssigneeId(rotation) }
       : defaultRotationForm(),
   );
 
@@ -1680,8 +1690,18 @@ function RotationPanel({
           </label>
           <RoommateChecks
             selected={form.participantIds}
-            onChange={(participantIds) => setForm((current) => ({ ...current, participantIds }))}
+            onChange={(participantIds) => setForm((current) => ({ ...current, participantIds, assigneeId: current.assigneeId && participantIds.includes(current.assigneeId) ? current.assigneeId : participantIds[0] }))}
           />
+          {rotation ? (
+            <label className="block">
+              <span className="label">Aktuell zuständig</span>
+              <select className="input" value={form.assigneeId ?? ""}
+                onChange={(event) => setForm((current) => ({ ...current, assigneeId: event.target.value }))}>
+                {form.participantIds.map((id) => <option key={id} value={id}>{nameFor(id)}</option>)}
+              </select>
+              <span className="mt-1 block text-xs text-ink/60">Korrigiert die Zuständigkeit, ohne die Aufgabe als erledigt zu markieren.</span>
+            </label>
+          ) : null}
           </fieldset>
           <div className="dialog-actions">
             <button className="secondary-button" type="button" disabled={pending} onClick={onClose}>Abbrechen</button>
@@ -1744,8 +1764,18 @@ function ChorePanel({
           </label>
           <RoommateChecks
             selected={form.participantIds}
-            onChange={(participantIds) => setForm((current) => ({ ...current, participantIds }))}
+            onChange={(participantIds) => setForm((current) => ({ ...current, participantIds, assigneeId: current.assigneeId && participantIds.includes(current.assigneeId) ? current.assigneeId : participantIds[0] }))}
           />
+          {chore ? (
+            <label className="block">
+              <span className="label">Aktuell zuständig</span>
+              <select className="input" value={form.assigneeId ?? ""}
+                onChange={(event) => setForm((current) => ({ ...current, assigneeId: event.target.value }))}>
+                {form.participantIds.map((id) => <option key={id} value={id}>{nameFor(id)}</option>)}
+              </select>
+              <span className="mt-1 block text-xs text-ink/60">Korrigiert die Zuständigkeit, ohne die Aufgabe als erledigt zu markieren.</span>
+            </label>
+          ) : null}
           {form.scheduleWeekday ? (
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
@@ -1887,7 +1917,7 @@ function ChoreRow({
       <div className="mt-3 flex flex-wrap gap-2 text-sm text-ink/75">
         <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
           <CalendarDays size={14} />
-          {chore.scheduleWeekday ? weekdayLabel(chore.scheduleWeekday) : formatDate(chore.nextDueDate)}
+          {chore.scheduleWeekday ? `${weekdayLabel(chore.scheduleWeekday)} · ${formatDate(chore.nextDueDate)}` : formatDate(chore.nextDueDate)}
         </span>
         <span className="inline-flex items-center gap-1 rounded-full bg-cloud px-2 py-1">
           <Repeat size={14} />
@@ -2472,6 +2502,7 @@ function expenseFormFromTransaction(transaction: FinanceTransaction): ExpenseFor
 
 function choreFormFromChore(chore: Chore): ChoreForm {
   return {
+    assigneeId: currentAssigneeId(chore),
     title: chore.title,
     description: chore.description,
     participantIds: chore.participantIds,

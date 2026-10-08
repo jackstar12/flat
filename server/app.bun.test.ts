@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { roommateIds } from "../src/shared/config";
+import type { Chore, Rotation } from "../src/shared/types";
 import { weekdayOfDate } from "../src/shared/tasks";
 import { app } from "./app";
 import { InferenceError } from "./inference";
@@ -49,6 +50,46 @@ describe("chore API", () => {
     expect(chore.frequencyUnit).toBe("week");
     expect(chore.scheduleWeekday).toBe("wednesday");
     expect(weekdayOfDate(chore.nextDueDate)).toBe("wednesday");
+  });
+
+  test("projects missed weeks on reads and anchors manual corrections to the current occurrence", async () => {
+    setSystemTime(new Date("2026-09-23T10:00:00Z"));
+    const cookie = await loginCookie();
+    const input = { title: "Weekly", participantIds: roommateIds };
+    const { chore } = await (await request("/api/tasks", cookie, input)).json() as { chore: Chore };
+    setSystemTime(new Date("2026-10-07T10:00:00Z"));
+    const listed = await (await request("/api/tasks", cookie, undefined, "GET")).json() as { chores: Chore[] };
+    expect(listed.chores[0]).toMatchObject({ rotationIndex: 2, nextDueDate: "2026-10-07", lastCompletedAt: null });
+    const corrected = await request(`/api/tasks/${chore.id}`, cookie, { ...input, assigneeId: "stadlmann" }, "PATCH");
+    expect((await corrected.json() as { chore: Chore }).chore).toMatchObject({ rotationIndex: 1, nextDueDate: "2026-10-07", lastCompletedAt: null });
+    setSystemTime(new Date("2026-10-14T10:00:00Z"));
+    const later = await (await request("/api/tasks", cookie, undefined, "GET")).json() as { chores: Chore[] };
+    expect(later.chores[0]).toMatchObject({ rotationIndex: 2, nextDueDate: "2026-10-14", lastCompletedAt: null });
+    const completed = await request(`/api/tasks/${chore.id}/complete`, cookie, {});
+    expect((await completed.json() as { chore: Chore }).chore).toMatchObject({ rotationIndex: 0, nextDueDate: "2026-10-21", lastCompletedBy: "kran" });
+  });
+
+  test("corrects assignees without completing and preserves identity when participants change", async () => {
+    const cookie = await loginCookie();
+    const input = { title: "Assignment", participantIds: roommateIds };
+    for (const kind of ["chore", "rotation"] as const) {
+      const base = kind === "chore" ? "/api/tasks" : "/api/tasks/rotations";
+      const created = await (await request(base, cookie, input)).json() as Record<string, Chore & Rotation>;
+      const original = created[kind];
+      const path = `${base}/${original.id}`;
+      const response = await request(path, cookie, { ...input, assigneeId: "mitter" }, "PATCH");
+      expect(response.status).toBe(200);
+      const corrected = (await response.json() as Record<string, Chore & Rotation>)[kind];
+      expect(corrected.rotationIndex).toBe(2);
+      expect(corrected.lastCompletedAt).toBeNull();
+      if (kind === "chore") expect(corrected.nextDueDate).toBe(original.nextDueDate);
+      const edited = await request(path, cookie, { ...input, participantIds: ["kran", "mitter"] }, "PATCH");
+      expect((await edited.json() as Record<string, Chore & Rotation>)[kind].rotationIndex).toBe(1);
+      const invalid = await request(path, cookie, { ...input, participantIds: ["kran"], assigneeId: "mitter" }, "PATCH");
+      expect(invalid.status).toBe(400);
+      const completed = await request(`${path}/complete`, cookie, {});
+      expect((await completed.json() as Record<string, Chore & Rotation>)[kind].rotationIndex).toBe(0);
+    }
   });
 
   test("editing a nonweekly legacy chore does not convert its schedule", async () => {

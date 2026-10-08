@@ -148,13 +148,30 @@ test("creates, completes, and deletes a rotating chore", async ({ page }, testIn
 
   const row = page.locator("article").filter({ hasText: choreName });
   await expect(row).toBeVisible();
-  await expect(row.getByText("Freitag", { exact: true })).toBeVisible();
+  await expect(row.getByText(/^Freitag ·/)).toBeVisible();
 
   await row.getByRole("button", { name: "Erledigt" }).click();
   await expect(row.getByText(secondRoommate.name)).toBeVisible();
 
   await row.getByTitle("Loschen").click();
   await expect(row).toHaveCount(0);
+});
+
+test("corrects the current chore assignee without completing it", async ({ page }, testInfo) => {
+  const title = `Correction ${testInfo.project.name}`;
+  await page.getByRole("button", { name: "Aufgaben" }).click();
+  await page.getByRole("button", { name: "Aufgabe", exact: true }).click();
+  await page.getByLabel("Titel").fill(title);
+  await page.getByRole("button", { name: "Speichern" }).click();
+  const row = page.locator("article").filter({ hasText: title });
+  await row.getByTitle("Bearbeiten", { exact: true }).click();
+  await page.getByLabel("Aktuell zuständig").selectOption("mitter");
+  await page.getByRole("button", { name: "Speichern" }).click();
+  await expect(row.getByText("Mitter", { exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Aufgaben" }).click();
+  await expect(row.getByText("Mitter", { exact: true })).toBeVisible();
+  await row.getByTitle("Loschen").click();
 });
 
 test("shows and advances the persisted Wäsche and Pfand rotations", async ({ page }) => {
