@@ -34,7 +34,7 @@ const transportFor = (choices: Choices, mutate?: (r: ReturnType<typeof responseF
   expect(init.redirect).toBe("error"); expect(init.credentials).toBe("omit");
   expect(Object.keys(init.headers)).toEqual(["Content-Type"]);
   const request = JSON.parse(init.body);
-  expect(request.model).toBe("jev-latest");
+  expect(request.model).toBe("jev-1.13.0");
   expect(request.state).not.toContain("amountCents"); expect(request.state).not.toContain('"shares"');
   const response = responseFor(init.body, choices); mutate?.(response); return json(response);
 };
@@ -310,3 +310,20 @@ test("digital PDF prompt prefers coherent embedded text; conflicting cents fail 
     }
   }
 });
+
+for (const printedTotalCents of [null, 999]) {
+  test(`missing/mismatched receipt total ${printedTotalCents} is 422, not outage`, async () => {
+    const db = new LocalDatabase(":memory:"); db.migrate();
+    let calls = 0;
+    try {
+      const env = bindings(db, async () => { calls++; throw new Error("must not call provider"); });
+      env.analyzeReceipt = async () => JSON.stringify({ ...extracted(), printedTotalCents });
+      const response = await app.request("/api/finance/receipt/analyze", { method: "POST", headers, body: form() }, env);
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({ code: "receipt_total_invalid" });
+      expect(calls).toBe(0);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM receipt_analysis_drafts").first<{ n: number }>()).toEqual({ n: 0 });
+      expect(db.prepare("SELECT COUNT(*) AS n FROM finance_transactions").first<{ n: number }>()).toEqual({ n: 0 });
+    } finally { db.close(); }
+  });
+}

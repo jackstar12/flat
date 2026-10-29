@@ -118,8 +118,11 @@ const answerSchema = z.strictObject({
   type: z.literal("choice"), choice: z.string(), confidence,
   probabilities: z.record(z.string(), confidence),
 });
+// Pin request and response together; latest can advance without a compatible review.
+const jevModel = "jev-1.13.0";
+export class ReceiptTotalError extends Error {}
 const responseSchema = z.strictObject({
-  model: z.literal("jev-1.13.0"),
+  model: z.literal(jevModel),
   answers: z.record(z.string(), answerSchema),
   usage: z.strictObject({ input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative() }),
 });
@@ -201,7 +204,7 @@ export async function analyzeWithJev(input: {
   })));
   const total = extraction.items.reduce((sum, item) => sum + item.amountCents, 0);
   if (extraction.printedTotalCents === null || total !== extraction.printedTotalCents) {
-    throw new InferenceError("Rechnungssumme fehlt oder stimmt nicht mit den Positionen überein.");
+    throw new ReceiptTotalError("Rechnungssumme fehlt oder stimmt nicht mit den Positionen überein.");
   }
   const items = extraction.items.map(item => ({ ...item,
     normalizedName: identities[normalizeReceiptIdentity(item.name)] ?? item.normalizedName,
@@ -220,7 +223,7 @@ export async function analyzeWithJev(input: {
     questions[`${i}-category`] = { type: "choice", instructions: `Choose the actual product category for ${identity}. ${labelGuidance} Use Sonstiges when identity remains unsupported.`, criteria: categoryCriteria };
     questions[`${i}-rule`] = { type: "choice", instructions: `Choose the matching current household rule for ${identity}. ${labelGuidance} Matching item rules take precedence over category rules. Otherwise choose a rule for the actual product category. Use none if no supported match.`, criteria: Object.fromEntries([["none", "No supported matching rule"], ...rules.map(rule => [rule.id, `${rule.target}: ${rule.match}. ${rule.extraDescription ?? ""}`])]) };
   });
-  const body = JSON.stringify({ model: "jev-latest", state: JSON.stringify({
+  const body = JSON.stringify({ model: jevModel, state: JSON.stringify({
     items: items.map((item, id) => ({ id: String(id), label: item.name, normalizedName: item.normalizedName })),
     rules: rules.map(({ id, target, match, extraDescription }) => ({ id, target, match, extraDescription })),
   }), questions });

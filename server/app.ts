@@ -1,4 +1,4 @@
-import { analyzeWithJev, type ReceiptDecisionConfig } from "./receipt-decisions";
+import { analyzeWithJev, ReceiptTotalError, type ReceiptDecisionConfig } from "./receipt-decisions";
 import { applyReceiptLearning, correctionStatements, getAnalysisDraft, invalidateReceiptEvidence, learningState, receiptHash } from "./receipt-learning";
 import { normalizeReceiptIdentity } from "../src/shared/receipt-learning";
 import { verifiedRoommate, type IdentityMapping } from "./identity";
@@ -697,6 +697,9 @@ app.post("/api/finance/receipt/analyze", async (c) => {
       initialAnalysis = normalizeReceiptAnalysis(parseModelJson(response), roommateIds, rules);
     }
   } catch (error) {
+    if (error instanceof ReceiptTotalError) {
+      return c.json({ error: "Die Endsumme fehlt oder stimmt nicht mit den Positionen überein. Bitte den vollständigen Beleg mit Endsumme hochladen.", code: "receipt_total_invalid" }, 422);
+    }
     // Provider credentials, redirects and timeouts are service failures, not
     // expiry of the person's Authentik session. Never forward upstream status.
     const timeout = error instanceof InferenceError && error.code === "timeout";

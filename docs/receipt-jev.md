@@ -14,8 +14,8 @@ Jev receives labels, generic names and current rule descriptions, closed categor
 choices and rule IDs. No prices, roommate shares, document images or saved
 financial history are sent to Jev. Local code validates the full response shape,
 exact answer keys/count, choice membership and probability keys/ranges. The
-recorded `jev-1.13.0` response version is pinned even though requests use
-`jev-latest`; a changed response model requires review. Literal item matches beat
+recorded `jev-1.13.0` response version is pinned and requests use the same
+`jev-1.13.0` pin; a changed model requires review. Literal item matches beat
 semantic item choices, which beat exact category fallback. A selected category
 rule inconsistent with the category fails. Allocations and signed cent sums are
 computed locally. Equal prose with near-equal positive percentages (e.g.
@@ -232,3 +232,17 @@ The TypeSafe app-key file is still absent. Legacy remains active; production
 configuration, service, assets and saved finances are unchanged.
 
 Final coordinator checks: typecheck and 87 decision/inference/app-backend tests passed (`final-backend.log` in staging). The prior 35 frontend/unit tests, database suite, staged build and 74 browser tests remain applicable; no UI/auth or schema change was made in the follow-ups.
+
+## 2026-10-29 outage repair
+
+`jev-latest` advanced to 1.14.0 while the response validator required 1.13.0,
+causing valid complete receipts to return 502. Pin requests to the existing
+validated 1.13.0 model (live provider confirmed it is still available). Keep
+strict response validation. Missing/mismatched final totals now return 422
+`receipt_total_invalid` with a full-receipt instruction, not a provider outage.
+No financial records or allocation rules were changed by this repair.
+
+Validation: 91 focused backend tests passed; TypeScript check passed. After the
+scoped flat-web.service restart, a complete synthetic receipt returned HTTP 200
+with correct total and allocation. The original subtotal-only image returned
+HTTP 422 receipt_total_invalid. Analysis created no expense.
