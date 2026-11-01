@@ -1,6 +1,10 @@
 # TGTG in Flat
 
 Entry: https://flat.kranawetter.dev/tgtg — native **TGTG** navigation tab.
+All sections use real navigation links: `/finanzen`, `/aufgaben`, `/tgtg`; `/`
+remains a finance alias. Deep-link reload, browser back/forward, active-page state
+and mobile 44px touch targets are supported.
+
 Uses Flat's existing Authentik WG + active-user gate and exact email/UID roommate
 mapping, including every `/api/tgtg/*` request. No separate login/provider/domain.
 

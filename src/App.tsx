@@ -48,6 +48,11 @@ import type {
 import { centsFromEuroInput, euroInputFromCents, formatDate, formatMoney } from "./shared/format";
 
 type View = "finanzen" | "aufgaben" | "tgtg";
+const viewPaths: Record<View, string> = { finanzen: "/finanzen", aufgaben: "/aufgaben", tgtg: "/tgtg" };
+function viewFromPath(): View {
+  const path = window.location.pathname.replace(/\/+$/, "");
+  return path === "/tgtg" ? "tgtg" : path === "/aufgaben" ? "aufgaben" : "finanzen";
+}
 
 type ExpenseForm = {
   description: string;
@@ -135,7 +140,16 @@ const defaultRotationForm = (): RotationForm => ({
 
 export default function App() {
   const [session, setSession] = useState<SessionPayload | null>(null);
-  const [activeView, setActiveView] = useState<View>(window.location.pathname === "/tgtg" ? "tgtg" : "finanzen");
+  const [activeView, setActiveView] = useState<View>(viewFromPath);
+  useEffect(() => {
+    const restore = () => setActiveView(viewFromPath());
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
+  function navigate(view: View) {
+    if (window.location.pathname !== viewPaths[view]) window.history.pushState(null, "", viewPaths[view]);
+    setActiveView(view);
+  }
   const [finance, setFinance] = useState<FinancePayload | null>(null);
   const [tasks, setTasks] = useState<TasksPayload | null>(null);
   const [authExpired, setAuthExpired] = useState(authenticationRequired);
@@ -270,9 +284,9 @@ export default function App() {
         <div className="app-shell mx-auto max-w-7xl px-4 sm:px-6">
           <h1 className="text-lg font-semibold sm:text-2xl">Hugo Wolfgang</h1>
           <nav aria-label="Hauptnavigation" className="app-navigation grid grid-cols-3 rounded-md border border-line bg-cloud p-1">
-            <NavButton active={activeView === "finanzen"} icon={<Banknote size={18} />} label="Finanzen" onClick={() => { setActiveView("finanzen"); window.history.replaceState(null, "", "/"); }} />
-            <NavButton active={activeView === "aufgaben"} icon={<ClipboardList size={18} />} label="Aufgaben" onClick={() => { setActiveView("aufgaben"); window.history.replaceState(null, "", "/"); }} />
-            <NavButton active={activeView === "tgtg"} icon={<Tags size={18} />} label="TGTG" onClick={() => { setActiveView("tgtg"); window.history.replaceState(null, "", "/tgtg"); }} />
+            <NavLink active={activeView === "finanzen"} icon={<Banknote size={18} />} label="Finanzen" href={viewPaths.finanzen} onClick={() => navigate("finanzen")} />
+            <NavLink active={activeView === "aufgaben"} icon={<ClipboardList size={18} />} label="Aufgaben" href={viewPaths.aufgaben} onClick={() => navigate("aufgaben")} />
+            <NavLink active={activeView === "tgtg"} icon={<Tags size={18} />} label="TGTG" href={viewPaths.tgtg} onClick={() => navigate("tgtg")} />
           </nav>
           <div className="app-identity flex items-center justify-end gap-2">
             {authExpired ? <span className="text-sm">Anmeldung erforderlich</span> : <PersonBadge roommate={session.roommate} />}
@@ -2281,22 +2295,27 @@ function DateInput({ label, value, onChange }: { label: string; value: string; o
   );
 }
 
-function NavButton({
+function NavLink({
   active,
   icon,
   label,
+  href,
   onClick,
 }: {
   active: boolean;
   icon: ReactNode;
   label: string;
+  href: string;
   onClick: () => void;
 }) {
   return (
-    <button className={navClass(active)} type="button" onClick={onClick}>
+    <a className={navClass(active)} href={href} aria-current={active ? "page" : undefined} onClick={event => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault(); onClick();
+    }}>
       {icon}
       <span>{label}</span>
-    </button>
+    </a>
   );
 }
 

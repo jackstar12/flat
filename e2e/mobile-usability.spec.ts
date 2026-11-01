@@ -28,7 +28,7 @@ for (const width of [320, 390, 1280]) {
     await fits(page);
     await page.screenshot({ path: info.outputPath(`settlement-${width}.png`) });
     await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Aufgaben", exact: true }).click();
+    await page.getByRole("link", { name: "Aufgaben", exact: true }).click();
     await fits(page);
     await page.screenshot({ path: info.outputPath(`tasks-${width}.png`), fullPage: true });
     await page.getByRole("button", { name: "Aufgabe", exact: true }).click();

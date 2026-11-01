@@ -4,7 +4,7 @@ test("native TGTG navigation, photos, search, stable/rated filters and history",
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
-  await page.getByRole("button", { name: "TGTG", exact: true }).click();
+  await page.getByRole("link", { name: "TGTG", exact: true }).click();
   await expect(page).toHaveURL(/\/tgtg$/);
   await expect(page.getByRole("heading", { name: "Sackerl finden" })).toBeVisible();
   await page.getByRole("searchbox", { name: "Sackerl suchen" }).fill("MEET Heinrich");

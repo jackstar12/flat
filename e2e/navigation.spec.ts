@@ -1,0 +1,33 @@
+import { expect, test } from "@playwright/test";
+
+test("section deep links, active state, reload and browser history", async ({ page }) => {
+  await page.goto("/tgtg");
+  const nav = page.getByRole("navigation", { name: "Hauptnavigation" });
+  const tgtg = nav.getByRole("link", { name: "TGTG", exact: true });
+  const tasks = nav.getByRole("link", { name: "Aufgaben", exact: true });
+  const finance = nav.getByRole("link", { name: "Finanzen", exact: true });
+  await expect(tgtg).toHaveAttribute("aria-current", "page");
+  await expect(tgtg).toHaveAttribute("href", "/tgtg");
+  expect((await tgtg.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expect(page.getByRole("heading", { name: "Sackerl finden" })).toBeVisible();
+  await tasks.click();
+  await expect(page).toHaveURL(/\/aufgaben$/);
+  await expect(tasks).toHaveAttribute("aria-current", "page");
+  await expect(tgtg).not.toHaveAttribute("aria-current");
+  await expect(page.getByRole("heading", { name: "Aufgaben", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(tasks).toHaveAttribute("aria-current", "page");
+  await finance.click();
+  await expect(page).toHaveURL(/\/finanzen$/);
+  await expect(page.getByRole("heading", { name: "Finanzen", exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(tasks).toHaveAttribute("aria-current", "page");
+  await page.goBack();
+  await expect(tgtg).toHaveAttribute("aria-current", "page");
+  await page.goForward();
+  await expect(tasks).toHaveAttribute("aria-current", "page");
+  await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.goto("/");
+  await expect(finance).toHaveAttribute("aria-current", "page");
+});

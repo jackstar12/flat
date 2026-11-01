@@ -14,10 +14,10 @@ test("shows one header brand and preserves finance and task headings", async ({ 
   const brands = header.getByText(/^Hugo(?: Wolfgang|-Wolf-Gang)$/).filter({ visible: true });
   await expect.soft(brands).toHaveCount(1);
   await expect(header.getByRole("heading", { level: 1 })).toBeVisible();
-  await expect(header.getByRole("button", { name: "Finanzen", exact: true })).toBeVisible();
-  await header.getByRole("button", { name: "Aufgaben", exact: true }).click();
+  await expect(header.getByRole("link", { name: "Finanzen", exact: true })).toBeVisible();
+  await header.getByRole("link", { name: "Aufgaben", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Aufgaben", exact: true })).toBeVisible();
   await expect.soft(brands).toHaveCount(1);
-  await header.getByRole("button", { name: "Finanzen", exact: true }).click();
+  await header.getByRole("link", { name: "Finanzen", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Finanzen", exact: true })).toBeVisible();
 });
