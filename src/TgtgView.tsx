@@ -61,8 +61,8 @@ export function TgtgView() {
     (radius === 999 || b.distance !== null && b.distance <= radius) && (!stable || b.stable) && (!rated || (b.rating ?? 0) >= 4.5 && (b.rating_count ?? 0) >= 30) &&
     (!favorites || !data?.personal || (source === "app" ? b.app_favorite : b.local_favorite)));
   rows.sort((a, b) => sort === "rating" ? (b.rating ?? -1) - (a.rating ?? -1) : sort === "price" ? (a.price ?? Infinity) - (b.price ?? Infinity) : (a.distance ?? Infinity) - (b.distance ?? Infinity));
-  return <section className="tgtg" aria-label="TGTG Bag Finder">
-    <div className="tg-heading"><div><span className="tg-eyebrow">GRAZ · UNIVIERTEL</span><h2>Sackerl finden</h2></div><button className="secondary-button" disabled={loading} onClick={() => void refresh()}><RefreshCw size={16} />Aktualisieren</button></div>
+  return <section className="tgtg" aria-label="TGTG">
+    <div className="tg-heading"><div><span className="tg-eyebrow">GRAZ · UNIVIERTEL</span><h2>TGTG</h2></div><button className="secondary-button" disabled={loading} onClick={() => void refresh()}><RefreshCw size={16} />Aktualisieren</button></div>
     <div className="tg-filters"><input aria-label="Sackerl suchen" type="search" placeholder="Geschäft, Straße oder Sackerl" value={query} onChange={e => setQuery(e.target.value)} />
       <select aria-label="Umkreis" value={radius} onChange={e => setRadius(Number(e.target.value))}><option value={1}>1 km</option><option value={2}>2 km</option><option value={3}>3 km</option><option value={999}>Alle gespeicherten</option></select>
       <select aria-label="Sortierung" value={sort} onChange={e => setSort(e.target.value)}><option value="distance">Nächste zuerst</option><option value="rating">Beste Bewertung</option><option value="price">Günstigste zuerst</option></select>

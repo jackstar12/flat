@@ -6,7 +6,7 @@ test("native TGTG navigation, photos, search, stable/rated filters and history",
   await page.goto("/");
   await page.getByRole("link", { name: "TGTG", exact: true }).click();
   await expect(page).toHaveURL(/\/tgtg$/);
-  await expect(page.getByRole("heading", { name: "Sackerl finden" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "TGTG" })).toBeVisible();
   await page.getByRole("searchbox", { name: "Sackerl suchen" }).fill("MEET Heinrich");
   await expect(page.locator(".tg-card")).toHaveCount(1);
   await page.getByLabel("Unveränderter Preis", { exact: true }).check();

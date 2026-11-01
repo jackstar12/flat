@@ -9,7 +9,7 @@ test("section deep links, active state, reload and browser history", async ({ pa
   await expect(tgtg).toHaveAttribute("aria-current", "page");
   await expect(tgtg).toHaveAttribute("href", "/tgtg");
   expect((await tgtg.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  await expect(page.getByRole("heading", { name: "Sackerl finden" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "TGTG" })).toBeVisible();
   await tasks.click();
   await expect(page).toHaveURL(/\/aufgaben$/);
   await expect(tasks).toHaveAttribute("aria-current", "page");
