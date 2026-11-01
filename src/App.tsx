@@ -1,3 +1,4 @@
+import { TgtgView } from "./TgtgView";
 import { api, apiForm, ApiError, checkSession, clearIdentity, expiryMessage, authenticationRequired } from "./api";
 import {
   Banknote,
@@ -46,7 +47,7 @@ import type {
 } from "./shared/types";
 import { centsFromEuroInput, euroInputFromCents, formatDate, formatMoney } from "./shared/format";
 
-type View = "finanzen" | "aufgaben";
+type View = "finanzen" | "aufgaben" | "tgtg";
 
 type ExpenseForm = {
   description: string;
@@ -134,7 +135,7 @@ const defaultRotationForm = (): RotationForm => ({
 
 export default function App() {
   const [session, setSession] = useState<SessionPayload | null>(null);
-  const [activeView, setActiveView] = useState<View>("finanzen");
+  const [activeView, setActiveView] = useState<View>(window.location.pathname === "/tgtg" ? "tgtg" : "finanzen");
   const [finance, setFinance] = useState<FinancePayload | null>(null);
   const [tasks, setTasks] = useState<TasksPayload | null>(null);
   const [authExpired, setAuthExpired] = useState(authenticationRequired);
@@ -268,9 +269,10 @@ export default function App() {
       <header className="border-b border-line bg-white/90">
         <div className="app-shell mx-auto max-w-7xl px-4 sm:px-6">
           <h1 className="text-lg font-semibold sm:text-2xl">Hugo Wolfgang</h1>
-          <nav aria-label="Hauptnavigation" className="app-navigation grid grid-cols-2 rounded-md border border-line bg-cloud p-1">
-            <NavButton active={activeView === "finanzen"} icon={<Banknote size={18} />} label="Finanzen" onClick={() => setActiveView("finanzen")} />
-            <NavButton active={activeView === "aufgaben"} icon={<ClipboardList size={18} />} label="Aufgaben" onClick={() => setActiveView("aufgaben")} />
+          <nav aria-label="Hauptnavigation" className="app-navigation grid grid-cols-3 rounded-md border border-line bg-cloud p-1">
+            <NavButton active={activeView === "finanzen"} icon={<Banknote size={18} />} label="Finanzen" onClick={() => { setActiveView("finanzen"); window.history.replaceState(null, "", "/"); }} />
+            <NavButton active={activeView === "aufgaben"} icon={<ClipboardList size={18} />} label="Aufgaben" onClick={() => { setActiveView("aufgaben"); window.history.replaceState(null, "", "/"); }} />
+            <NavButton active={activeView === "tgtg"} icon={<Tags size={18} />} label="TGTG" onClick={() => { setActiveView("tgtg"); window.history.replaceState(null, "", "/tgtg"); }} />
           </nav>
           <div className="app-identity flex items-center justify-end gap-2">
             {authExpired ? <span className="text-sm">Anmeldung erforderlich</span> : <PersonBadge roommate={session.roommate} />}
@@ -289,7 +291,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {activeView === "finanzen" ? (
+        {activeView === "tgtg" ? <TgtgView key={`tgtg-${identityRevision}`} /> : activeView === "finanzen" ? (
           <FinanceView key={`finance-${identityRevision}`}
             data={finance}
             authenticatedRoommateId={session.roommate?.id}
