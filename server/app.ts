@@ -1,4 +1,3 @@
-import type { TgtgRead } from "./tgtg";
 import { analyzeWithJev, ReceiptTotalError, type ReceiptDecisionConfig } from "./receipt-decisions";
 import { applyReceiptLearning, correctionStatements, getAnalysisDraft, invalidateReceiptEvidence, learningState, receiptHash } from "./receipt-learning";
 import { normalizeReceiptIdentity } from "../src/shared/receipt-learning";
@@ -45,7 +44,6 @@ type Env = {
   TRUSTED_ORIGINS: readonly string[];
   analyzeReceipt: typeof analyzeReceipt;
   receiptDecisions?: ReceiptDecisionConfig;
-  tgtgRead?: TgtgRead;
 };
 
 type AppBindings = {
@@ -332,14 +330,6 @@ app.get("/api/session", (c) => c.json({
 // Old clients cannot select or persist a different identity.
 app.post("/api/login", (c) => c.json({ error: "Personenauswahl wurde entfernt." }, 410));
 app.post("/api/logout", (c) => c.json({ error: "Bitte über Authentik abmelden." }, 410));
-
-// Same native identity and stale-actor guard as every other Flat API.
-app.get("/api/tgtg/:endpoint", async (c) => {
-  const endpoint = c.req.param("endpoint");
-  if (!["catalog", "history", "photo"].includes(endpoint)) return c.json({ error: "Nicht gefunden." }, 404);
-  if (!c.env.tgtgRead) return c.json({ error: "TGTG ist nicht verfügbar." }, 503);
-  return c.env.tgtgRead(endpoint, new URL(c.req.url).searchParams, c.get("roommate").id);
-});
 
 app.get("/api/finance", async (c) => {
   const transactions = await listFinanceTransactions(c.env.DB);

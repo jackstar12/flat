@@ -1,4 +1,3 @@
-import { createTgtgReader } from "./tgtg";
 import { receiptDecisionConfig } from "./receipt-decisions";
 import { resolve, sep } from "node:path";
 import { analyzeReceipt } from "./inference";
@@ -17,7 +16,6 @@ const bindings = {
   TRUSTED_ORIGINS: config.trustedOrigins,
   analyzeReceipt: analyzeReceipt,
   receiptDecisions,
-  tgtgRead: createTgtgReader(),
 };
 const apiOnly = process.argv.includes("--api-only");
 const distDirectory = resolve(import.meta.dir, "../dist");

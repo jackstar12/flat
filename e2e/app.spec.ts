@@ -139,7 +139,7 @@ test("persists structured receipt rules", async ({ page }, testInfo) => {
 test("creates, completes, and deletes a rotating chore", async ({ page }, testInfo) => {
   const choreName = `Playwright Chore ${testInfo.project.name}`;
 
-  await page.getByRole("link", { name: "Aufgaben" }).click();
+  await page.getByRole("button", { name: "Aufgaben" }).click();
   await page.getByRole("button", { name: "Aufgabe", exact: true }).click();
   await page.getByLabel("Titel").fill(choreName);
   await expect(page.getByLabel("Wochentag")).toHaveValue("wednesday");
@@ -159,7 +159,7 @@ test("creates, completes, and deletes a rotating chore", async ({ page }, testIn
 
 test("corrects the current chore assignee without completing it", async ({ page }, testInfo) => {
   const title = `Correction ${testInfo.project.name}`;
-  await page.getByRole("link", { name: "Aufgaben" }).click();
+  await page.getByRole("button", { name: "Aufgaben" }).click();
   await page.getByRole("button", { name: "Aufgabe", exact: true }).click();
   await page.getByLabel("Titel").fill(title);
   await page.getByRole("button", { name: "Speichern" }).click();
@@ -169,13 +169,13 @@ test("corrects the current chore assignee without completing it", async ({ page 
   await page.getByRole("button", { name: "Speichern" }).click();
   await expect(row.getByText("Mitter", { exact: true })).toBeVisible();
   await page.reload();
-  await page.getByRole("link", { name: "Aufgaben" }).click();
+  await page.getByRole("button", { name: "Aufgaben" }).click();
   await expect(row.getByText("Mitter", { exact: true })).toBeVisible();
   await row.getByTitle("Loschen").click();
 });
 
 test("shows and advances the persisted Wäsche and Pfand rotations", async ({ page }) => {
-  await page.getByRole("link", { name: "Aufgaben" }).click();
+  await page.getByRole("button", { name: "Aufgaben" }).click();
 
   const cards = page.getByTestId("rotation-card");
   await expect(cards).toHaveCount(2);
@@ -192,7 +192,7 @@ test("shows and advances the persisted Wäsche and Pfand rotations", async ({ pa
 test("creates, edits, completes, and deletes a rotation", async ({ page }, testInfo) => {
   const rotationName = `Playwright Rad ${testInfo.project.name}`;
   const updatedName = `${rotationName} neu`;
-  await page.getByRole("link", { name: "Aufgaben" }).click();
+  await page.getByRole("button", { name: "Aufgaben" }).click();
   await page.getByRole("button", { name: "Rad", exact: true }).click();
   await page.getByLabel("Name").fill(rotationName);
   await page.getByLabel("Notiz").fill("Testrotation");
