@@ -867,9 +867,12 @@ function ReceiptImportPanel({
             {analysis ? (
               <fieldset disabled={saving || saveLocked} className="min-w-0 space-y-4 p-3 sm:p-4">
                 {analysis.warnings.length ? (
-                  <div className="rounded-md bg-lemon/30 px-3 py-2 text-sm text-ink">
-                    {analysis.warnings.join(" ")}
-                  </div>
+                  <details className="rounded-md bg-lemon/30 px-3 py-2 text-sm text-ink">
+                    <summary className="cursor-pointer font-semibold">Hinweise zur Zuordnung</summary>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {[...new Set(analysis.warnings)].map((warning) => <li key={warning}>{warning}</li>)}
+                    </ul>
+                  </details>
                 ) : null}
                 <div className="grid grid-cols-3 gap-1.5">
                   {analysis.roommateTotals.map((split) => (
